@@ -16,49 +16,71 @@ Write-Host "  Obsidian LLM Wiki 一键安装" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 
 # ----------------------------------------------------------
-# 0. 检查管理员权限（winget 需要）
+# 0. 检查管理员权限
 # ----------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Host "`n[!] 建议以管理员身份运行以确保 winget 正常工作。" -ForegroundColor Yellow
+    Write-Host "`n[!] 建议以管理员身份运行以确保安装正常。" -ForegroundColor Yellow
     Write-Host "    右键此脚本 -> 使用 PowerShell 运行（管理员）`n" -ForegroundColor Yellow
 }
 
 # ----------------------------------------------------------
-# 1. 安装 Git
+# 1. 安装 Git（优先使用本地安装包）
 # ----------------------------------------------------------
 Write-Step "检查 Git..."
 $gitPath = Get-Command git -ErrorAction SilentlyContinue
 if ($gitPath) {
     Write-Host "  Git 已安装: $(git --version)" -ForegroundColor Green
 } else {
-    Write-Host "  正在安装 Git..." -ForegroundColor Yellow
-    winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
+    $localGit = Join-Path $repoRoot "installers\Git-Setup.exe"
+    if (Test-Path $localGit) {
+        Write-Host "  使用本地安装包安装 Git..." -ForegroundColor Yellow
+        Start-Process -FilePath $localGit -ArgumentList "/VERYSILENT", "/NORESTART", "/NOCANCEL", "/SP-", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS" -Wait
+    } else {
+        Write-Host "  本地安装包未找到，尝试 winget 在线安装..." -ForegroundColor Yellow
+        winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
+    }
     # 刷新 PATH
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     if (Get-Command git -ErrorAction SilentlyContinue) {
         Write-Host "  Git 安装成功: $(git --version)" -ForegroundColor Green
     } else {
-        Write-Host "  [!] Git 安装后未找到，请手动安装: https://git-scm.com/download/win" -ForegroundColor Red
+        Write-Host "  [!] Git 安装后未找到，请手动安装 installers\Git-Setup.exe" -ForegroundColor Red
         exit 1
     }
 }
 
 # ----------------------------------------------------------
-# 2. 安装 Claude Code
+# 2. 安装 Claude Code（优先使用本地安装包）
 # ----------------------------------------------------------
 Write-Step "检查 Claude Code..."
 $claudePath = Get-Command claude -ErrorAction SilentlyContinue
 if ($claudePath) {
     Write-Host "  Claude Code 已安装: $(claude --version)" -ForegroundColor Green
 } else {
-    Write-Host "  正在安装 Claude Code..." -ForegroundColor Yellow
-    winget install Anthropic.ClaudeCode --accept-source-agreements --accept-package-agreements
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $localClaude = Join-Path $repoRoot "installers\claude.exe"
+    if (Test-Path $localClaude) {
+        Write-Host "  使用本地安装包部署 Claude Code..." -ForegroundColor Yellow
+        # 复制到用户本地目录并加入 PATH
+        $claudeInstallDir = "$env:LOCALAPPDATA\ClaudeCode"
+        New-Item -ItemType Directory -Force -Path $claudeInstallDir | Out-Null
+        Copy-Item $localClaude "$claudeInstallDir\claude.exe" -Force
+        # 将目录加入用户 PATH
+        $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath -notlike "*$claudeInstallDir*") {
+            [System.Environment]::SetEnvironmentVariable("Path", "$userPath;$claudeInstallDir", "User")
+        }
+        $env:Path = "$env:Path;$claudeInstallDir"
+        Write-Host "  Claude Code 已部署到: $claudeInstallDir" -ForegroundColor Green
+    } else {
+        Write-Host "  本地安装包未找到，尝试 winget 在线安装..." -ForegroundColor Yellow
+        winget install Anthropic.ClaudeCode --accept-source-agreements --accept-package-agreements
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    }
     if (Get-Command claude -ErrorAction SilentlyContinue) {
         Write-Host "  Claude Code 安装成功" -ForegroundColor Green
     } else {
-        Write-Host "  [!] Claude Code 安装后未找到，请重启终端后重试" -ForegroundColor Red
+        Write-Host "  [!] Claude Code 安装失败，请手动运行: winget install Anthropic.ClaudeCode" -ForegroundColor Red
         exit 1
     }
 }
