@@ -16,7 +16,36 @@ Write-Host "  Obsidian LLM Wiki 一键安装" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 
 # ----------------------------------------------------------
-# 0. 检查管理员权限
+# 0. 激活码验证
+# ----------------------------------------------------------
+Write-Step "验证激活码..."
+$activationCode = Read-Host "  请输入激活码"
+
+# 校验格式: WIKI-XXXX-XXXX-HASH
+if ($activationCode -match '^WIKI-([A-Z0-9]{4})-([A-Z0-9]{4})-([A-F0-9]{4})$') {
+    $prefix = $Matches[1] + $Matches[2]
+    $inputHash = $Matches[3]
+    $secret = "wiki2026salt"
+    $raw = "$prefix$secret"
+    $computedHash = [System.BitConverter]::ToString(
+        [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+            [System.Text.Encoding]::UTF8.GetBytes($raw)
+        )
+    ).Replace("-","").Substring(0,4)
+    if ($inputHash -ne $computedHash) {
+        Write-Host "  [!] 激活码无效，请联系服务提供者获取正确的激活码" -ForegroundColor Red
+        Read-Host "按回车退出"
+        exit 1
+    }
+    Write-Host "  激活码验证通过" -ForegroundColor Green
+} else {
+    Write-Host "  [!] 激活码格式错误，正确格式: WIKI-XXXX-XXXX-XXXX" -ForegroundColor Red
+    Read-Host "按回车退出"
+    exit 1
+}
+
+# ----------------------------------------------------------
+# 1. 检查管理员权限
 # ----------------------------------------------------------
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
