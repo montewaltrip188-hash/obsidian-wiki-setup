@@ -1,0 +1,204 @@
+# ============================================================
+# Obsidian LLM Wiki - Windows 一键安装脚本
+# ============================================================
+# 用法: 右键 -> 使用 PowerShell 运行
+#       或在 PowerShell 中执行: powershell -ExecutionPolicy Bypass -File setup-win.ps1
+# ============================================================
+
+$ErrorActionPreference = "Stop"
+$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+function Write-Step { param($msg) Write-Host "`n[$script:step] $msg" -ForegroundColor Cyan; $script:step++ }
+$script:step = 1
+
+Write-Host "============================================" -ForegroundColor Green
+Write-Host "  Obsidian LLM Wiki 一键安装" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Green
+
+# ----------------------------------------------------------
+# 0. 检查管理员权限（winget 需要）
+# ----------------------------------------------------------
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "`n[!] 建议以管理员身份运行以确保 winget 正常工作。" -ForegroundColor Yellow
+    Write-Host "    右键此脚本 -> 使用 PowerShell 运行（管理员）`n" -ForegroundColor Yellow
+}
+
+# ----------------------------------------------------------
+# 1. 安装 Git
+# ----------------------------------------------------------
+Write-Step "检查 Git..."
+$gitPath = Get-Command git -ErrorAction SilentlyContinue
+if ($gitPath) {
+    Write-Host "  Git 已安装: $(git --version)" -ForegroundColor Green
+} else {
+    Write-Host "  正在安装 Git..." -ForegroundColor Yellow
+    winget install --id Git.Git -e --accept-source-agreements --accept-package-agreements
+    # 刷新 PATH
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        Write-Host "  Git 安装成功: $(git --version)" -ForegroundColor Green
+    } else {
+        Write-Host "  [!] Git 安装后未找到，请手动安装: https://git-scm.com/download/win" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# ----------------------------------------------------------
+# 2. 安装 Claude Code
+# ----------------------------------------------------------
+Write-Step "检查 Claude Code..."
+$claudePath = Get-Command claude -ErrorAction SilentlyContinue
+if ($claudePath) {
+    Write-Host "  Claude Code 已安装: $(claude --version)" -ForegroundColor Green
+} else {
+    Write-Host "  正在安装 Claude Code..." -ForegroundColor Yellow
+    winget install Anthropic.ClaudeCode --accept-source-agreements --accept-package-agreements
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Host "  Claude Code 安装成功" -ForegroundColor Green
+    } else {
+        Write-Host "  [!] Claude Code 安装后未找到，请重启终端后重试" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# ----------------------------------------------------------
+# 3. 配置 DeepSeek API
+# ----------------------------------------------------------
+Write-Step "配置 DeepSeek API..."
+$claudeDir = "$env:USERPROFILE\.claude"
+$settingsPath = "$claudeDir\settings.json"
+
+if (Test-Path $settingsPath) {
+    $existing = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    if ($existing.env.ANTHROPIC_AUTH_TOKEN -and $existing.env.ANTHROPIC_AUTH_TOKEN -ne "sk-YOUR-API-KEY") {
+        Write-Host "  API 已配置，跳过" -ForegroundColor Green
+        $skipApi = $true
+    }
+}
+
+if (-not $skipApi) {
+    Write-Host ""
+    Write-Host "  请输入你的 DeepSeek API Key" -ForegroundColor Yellow
+    Write-Host "  (获取地址: https://platform.deepseek.com)" -ForegroundColor Yellow
+    $apiKey = Read-Host "  API Key"
+
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        Write-Host "  [!] 未输入 API Key，跳过配置。稍后可手动编辑: $settingsPath" -ForegroundColor Yellow
+        $apiKey = "sk-YOUR-API-KEY"
+    }
+
+    New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+    $settings = @"
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "$apiKey",
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash"
+  }
+}
+"@
+    $settings | Out-File -FilePath $settingsPath -Encoding utf8 -Force
+    Write-Host "  API 配置完成" -ForegroundColor Green
+}
+
+# ----------------------------------------------------------
+# 4. 部署 Obsidian Vault
+# ----------------------------------------------------------
+Write-Step "部署知识库..."
+$defaultVaultPath = "$env:USERPROFILE\Documents\ObsidianVault"
+Write-Host "  知识库将部署到: $defaultVaultPath"
+Write-Host "  (按回车确认，或输入自定义路径)" -ForegroundColor Yellow
+$customPath = Read-Host "  路径"
+if (-not [string]::IsNullOrWhiteSpace($customPath)) {
+    $defaultVaultPath = $customPath
+}
+
+$vaultZip = Join-Path $repoRoot "vault.zip"
+if (-not (Test-Path $vaultZip)) {
+    Write-Host "  [!] 未找到 vault.zip，请确认它和此脚本在同一目录" -ForegroundColor Red
+    exit 1
+}
+
+if (Test-Path $defaultVaultPath) {
+    Write-Host "  [!] 目录已存在: $defaultVaultPath" -ForegroundColor Yellow
+    $overwrite = Read-Host "  是否覆盖？(y/N)"
+    if ($overwrite -ne 'y' -and $overwrite -ne 'Y') {
+        Write-Host "  跳过部署" -ForegroundColor Yellow
+        $skipDeploy = $true
+    }
+}
+
+if (-not $skipDeploy) {
+    Write-Host "  正在解压知识库..." -ForegroundColor Yellow
+    Expand-Archive -Path $vaultZip -DestinationPath (Split-Path $defaultVaultPath -Parent) -Force
+    # Expand-Archive 会解压到 vault/ 子目录，重命名
+    $extractedPath = Join-Path (Split-Path $defaultVaultPath -Parent) "vault"
+    if ((Test-Path $extractedPath) -and ($extractedPath -ne $defaultVaultPath)) {
+        if (Test-Path $defaultVaultPath) { Remove-Item $defaultVaultPath -Recurse -Force }
+        Rename-Item $extractedPath $defaultVaultPath
+    }
+    Write-Host "  知识库已部署到: $defaultVaultPath" -ForegroundColor Green
+}
+
+# ----------------------------------------------------------
+# 5. 配置 Claudian 插件的 Claude CLI 路径
+# ----------------------------------------------------------
+Write-Step "配置 Claudian 插件..."
+$claudeExe = (Get-Command claude -ErrorAction SilentlyContinue).Source
+if ($claudeExe) {
+    $claudianData = @{ claudePath = $claudeExe } | ConvertTo-Json
+    $claudianDataPath = Join-Path $defaultVaultPath ".obsidian\plugins\claudian\data.json"
+    if (Test-Path (Split-Path $claudianDataPath -Parent)) {
+        $claudianData | Out-File -FilePath $claudianDataPath -Encoding utf8 -Force
+        Write-Host "  Claudian 已配置 CLI 路径: $claudeExe" -ForegroundColor Green
+    }
+}
+
+# ----------------------------------------------------------
+# 6. 验证安装
+# ----------------------------------------------------------
+Write-Step "验证安装..."
+Write-Host ""
+$checks = @(
+    @{ Name = "Git";          Cmd = "git --version" },
+    @{ Name = "Claude Code";  Cmd = "claude --version" },
+    @{ Name = "API 配置";     Path = $settingsPath },
+    @{ Name = "知识库";       Path = $defaultVaultPath }
+)
+
+foreach ($check in $checks) {
+    if ($check.Cmd) {
+        try {
+            $result = Invoke-Expression $check.Cmd 2>&1
+            Write-Host "  [OK] $($check.Name): $result" -ForegroundColor Green
+        } catch {
+            Write-Host "  [X]  $($check.Name): 未安装" -ForegroundColor Red
+        }
+    } elseif ($check.Path) {
+        if (Test-Path $check.Path) {
+            Write-Host "  [OK] $($check.Name): $($check.Path)" -ForegroundColor Green
+        } else {
+            Write-Host "  [X]  $($check.Name): 未找到" -ForegroundColor Red
+        }
+    }
+}
+
+# ----------------------------------------------------------
+# 完成
+# ----------------------------------------------------------
+Write-Host "`n============================================" -ForegroundColor Green
+Write-Host "  安装完成！" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "下一步：" -ForegroundColor Yellow
+Write-Host "  1. 打开 Obsidian -> 打开文件夹作为库 -> 选择 $defaultVaultPath"
+Write-Host "  2. 信任插件并启用"
+Write-Host "  3. 阅读「使用指南」文件夹中的文档"
+Write-Host ""
+Read-Host "按回车退出"
