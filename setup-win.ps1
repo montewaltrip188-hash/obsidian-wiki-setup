@@ -240,7 +240,7 @@ if (-not $skipApi) {
 }
 "@
     $settings | Out-File -FilePath $settingsPath -Encoding utf8 -Force
-    Write-Host "  API 配置完成 ($providerName: $mainModel)" -ForegroundColor Green
+    Write-Host "  API 配置完成 (${providerName}: ${mainModel})" -ForegroundColor Green
 }
 
 # ----------------------------------------------------------
