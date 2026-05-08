@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # Obsidian LLM Wiki - Windows 一键安装脚本
 # ============================================================
 # 用法: 右键 -> 使用 PowerShell 运行
@@ -54,7 +54,41 @@ if (-not $isAdmin) {
 }
 
 # ----------------------------------------------------------
-# 1. 安装 Git（优先使用本地安装包）
+# 1. 安装 Obsidian
+# ----------------------------------------------------------
+Write-Step "检查 Obsidian..."
+$obsidianPath = "$env:LOCALAPPDATA\Obsidian\Obsidian.exe"
+if (Test-Path $obsidianPath) {
+    Write-Host "  Obsidian 已安装" -ForegroundColor Green
+} else {
+    # 检查本地安装包（完整文件或分片文件）
+    $localObsidian = Join-Path $repoRoot "installers\Obsidian-1.12.7.exe"
+    if (-not (Test-Path $localObsidian)) {
+        # 尝试从分片合并
+        $part1 = Join-Path $repoRoot "installers\Obsidian-win-part1.bin"
+        if (Test-Path $part1) {
+            Write-Host "  正在合并 Obsidian 安装包分片..." -ForegroundColor Yellow
+            $parts = Get-ChildItem (Join-Path $repoRoot "installers\Obsidian-win-part*.bin") | Sort-Object Name
+            $outStream = [System.IO.File]::Create($localObsidian)
+            foreach ($part in $parts) {
+                $bytes = [System.IO.File]::ReadAllBytes($part.FullName)
+                $outStream.Write($bytes, 0, $bytes.Length)
+            }
+            $outStream.Close()
+            Write-Host "  合并完成" -ForegroundColor Green
+        }
+    }
+    if (Test-Path $localObsidian) {
+        Write-Host "  正在安装 Obsidian..." -ForegroundColor Yellow
+        Start-Process -FilePath $localObsidian -ArgumentList "/S" -Wait
+        Write-Host "  Obsidian 安装完成" -ForegroundColor Green
+    } else {
+        Write-Host "  [!] 未找到 Obsidian 安装包，请手动下载安装: https://obsidian.md" -ForegroundColor Yellow
+    }
+}
+
+# ----------------------------------------------------------
+# 2. 安装 Git（优先使用本地安装包）
 # ----------------------------------------------------------
 Write-Step "检查 Git..."
 $gitPath = Get-Command git -ErrorAction SilentlyContinue
@@ -115,9 +149,9 @@ if ($claudePath) {
 }
 
 # ----------------------------------------------------------
-# 3. 配置 DeepSeek API
+# 3. 配置 AI 模型
 # ----------------------------------------------------------
-Write-Step "配置 DeepSeek API..."
+Write-Step "配置 AI 模型..."
 $claudeDir = "$env:USERPROFILE\.claude"
 $settingsPath = "$claudeDir\settings.json"
 
@@ -131,8 +165,59 @@ if (Test-Path $settingsPath) {
 
 if (-not $skipApi) {
     Write-Host ""
-    Write-Host "  请输入你的 DeepSeek API Key" -ForegroundColor Yellow
-    Write-Host "  (获取地址: https://platform.deepseek.com)" -ForegroundColor Yellow
+    Write-Host "  请选择 AI 模型:" -ForegroundColor Yellow
+    Write-Host "    1. DeepSeek (推荐，国内直连，无需 VPN)" -ForegroundColor White
+    Write-Host "    2. Claude 原版 (需要 VPN 或海外网络)" -ForegroundColor White
+    Write-Host "    3. OpenAI (需要 VPN 或海外网络)" -ForegroundColor White
+    Write-Host "    4. 自定义 API" -ForegroundColor White
+    $modelChoice = Read-Host "  请输入编号 (默认 1)"
+    if ([string]::IsNullOrWhiteSpace($modelChoice)) { $modelChoice = "1" }
+
+    switch ($modelChoice) {
+        "1" {
+            $baseUrl = "https://api.deepseek.com/anthropic"
+            $mainModel = "deepseek-v4-pro"
+            $fastModel = "deepseek-v4-flash"
+            $apiUrl = "https://platform.deepseek.com"
+            $providerName = "DeepSeek"
+        }
+        "2" {
+            $baseUrl = "https://api.anthropic.com"
+            $mainModel = "claude-sonnet-4-6"
+            $fastModel = "claude-haiku-4-5-20251001"
+            $apiUrl = "https://console.anthropic.com"
+            $providerName = "Claude"
+        }
+        "3" {
+            $baseUrl = "https://api.openai.com/v1"
+            $mainModel = "gpt-4.1"
+            $fastModel = "gpt-4.1-mini"
+            $apiUrl = "https://platform.openai.com"
+            $providerName = "OpenAI"
+        }
+        "4" {
+            Write-Host "  请输入 API Base URL (如 https://api.example.com/v1):" -ForegroundColor Yellow
+            $baseUrl = Read-Host "  Base URL"
+            Write-Host "  请输入主模型名称:" -ForegroundColor Yellow
+            $mainModel = Read-Host "  主模型"
+            Write-Host "  请输入快速模型名称 (可与主模型相同):" -ForegroundColor Yellow
+            $fastModel = Read-Host "  快速模型"
+            $apiUrl = $baseUrl
+            $providerName = "自定义"
+        }
+        default {
+            $baseUrl = "https://api.deepseek.com/anthropic"
+            $mainModel = "deepseek-v4-pro"
+            $fastModel = "deepseek-v4-flash"
+            $apiUrl = "https://platform.deepseek.com"
+            $providerName = "DeepSeek"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  已选择: $providerName" -ForegroundColor Green
+    Write-Host "  请输入你的 API Key" -ForegroundColor Yellow
+    Write-Host "  (获取地址: $apiUrl)" -ForegroundColor Yellow
     $apiKey = Read-Host "  API Key"
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
@@ -145,17 +230,17 @@ if (-not $skipApi) {
 {
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "$apiKey",
-    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-    "ANTHROPIC_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash"
+    "ANTHROPIC_BASE_URL": "$baseUrl",
+    "ANTHROPIC_MODEL": "$mainModel",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "$mainModel",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "$mainModel",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "$fastModel",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "$fastModel"
   }
 }
 "@
     $settings | Out-File -FilePath $settingsPath -Encoding utf8 -Force
-    Write-Host "  API 配置完成" -ForegroundColor Green
+    Write-Host "  API 配置完成 ($providerName: $mainModel)" -ForegroundColor Green
 }
 
 # ----------------------------------------------------------
