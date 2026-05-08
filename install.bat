@@ -1,9 +1,15 @@
 @echo off
 chcp 65001 >nul 2>&1
+set "PS_SCRIPT=%~dp0setup-win.ps1"
 if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" (
-    "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -File "%~dp0setup-win.ps1"
+    "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -ExecutionPolicy Bypass -File "%PS_SCRIPT%"
 ) else (
-    echo [!] 未找到 PowerShell，请确认系统为 Windows 7 SP1 或以上版本
-    echo     下载地址: https://aka.ms/wmf5download
+    where pwsh >nul 2>&1
+    if not errorlevel 1 (
+        pwsh -ExecutionPolicy Bypass -File "%PS_SCRIPT%"
+    ) else (
+        echo [!] 未找到 PowerShell
+        echo     请安装 PowerShell: https://aka.ms/powershell
+    )
 )
 pause
