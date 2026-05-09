@@ -22,11 +22,21 @@ if (-not (Test-Path $7z)) {
 
 # 2. 检测 Obsidian 是否已安装
 $obsidianInstalled = (Test-Path "$env:LOCALAPPDATA\Obsidian\Obsidian.exe") -or (Test-Path "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe") -or (Test-Path "$env:ProgramFiles\Obsidian\Obsidian.exe")
+$downloadObsidian = $true
 if ($obsidianInstalled) {
-    Write-Host "Obsidian 已安装，跳过下载 Obsidian 安装包" -ForegroundColor Green
-    $fileCount = 2
+    Write-Host "检测到 Obsidian 已安装" -ForegroundColor Green
+    $downloadObsidian = $false
 } else {
+    $choice = Read-Host "是否需要下载 Obsidian 安装包？(Y/n)"
+    if ($choice -eq 'n' -or $choice -eq 'N') {
+        $downloadObsidian = $false
+    }
+}
+if ($downloadObsidian) {
     $fileCount = 5
+} else {
+    Write-Host "跳过 Obsidian 下载" -ForegroundColor Yellow
+    $fileCount = 2
 }
 
 # 3. 下载安装包
@@ -39,7 +49,7 @@ Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part1.zip" -OutFile "part1.zip"
 Write-Host "  [$idx/$fileCount] part1.zip 完成" -ForegroundColor Green; $idx++
 Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part2.zip" -OutFile "part2.zip"
 Write-Host "  [$idx/$fileCount] part2.zip 完成" -ForegroundColor Green; $idx++
-if (-not $obsidianInstalled) {
+if ($downloadObsidian) {
     1..3 | ForEach-Object {
         Invoke-WebRequest "$base2/Obsidian-win-part$_.bin" -OutFile "Obsidian-win-part$_.bin"
         Write-Host "  [$idx/$fileCount] Obsidian-win-part$_.bin 完成" -ForegroundColor Green; $script:idx++
@@ -61,7 +71,7 @@ if (Test-Path $7z) {
 }
 
 # 5. 合并 Obsidian 分片
-if (-not $obsidianInstalled) {
+if ($downloadObsidian) {
     Write-Host "正在合并 Obsidian 安装包..." -ForegroundColor Yellow
     mkdir "$d\install\installers" -Force | Out-Null
     $out = [System.IO.File]::Create("$d\install\installers\Obsidian-1.12.7.exe")
