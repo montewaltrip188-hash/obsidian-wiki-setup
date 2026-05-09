@@ -21,7 +21,7 @@ if (-not (Test-Path $7z)) {
 }
 
 # 2. 检测 Obsidian 是否已安装
-$obsidianInstalled = (Test-Path "$env:LOCALAPPDATA\Obsidian\Obsidian.exe") -or (Test-Path "$env:ProgramFiles\Obsidian\Obsidian.exe")
+$obsidianInstalled = (Test-Path "$env:LOCALAPPDATA\Obsidian\Obsidian.exe") -or (Test-Path "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe") -or (Test-Path "$env:ProgramFiles\Obsidian\Obsidian.exe")
 if ($obsidianInstalled) {
     Write-Host "Obsidian 已安装，跳过下载 Obsidian 安装包" -ForegroundColor Green
     $fileCount = 2

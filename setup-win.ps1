@@ -57,8 +57,8 @@ if (-not $isAdmin) {
 # 1. 安装 Obsidian
 # ----------------------------------------------------------
 Write-Step "检查 Obsidian..."
-$obsidianPath = "$env:LOCALAPPDATA\Obsidian\Obsidian.exe"
-if (Test-Path $obsidianPath) {
+$obsidianInstalled = (Test-Path "$env:LOCALAPPDATA\Obsidian\Obsidian.exe") -or (Test-Path "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe") -or (Test-Path "$env:ProgramFiles\Obsidian\Obsidian.exe")
+if ($obsidianInstalled) {
     Write-Host "  Obsidian 已安装" -ForegroundColor Green
 } else {
     # 检查本地安装包（完整文件或分片文件）
