@@ -20,18 +20,30 @@ if (-not (Test-Path $7z)) {
     }
 }
 
-# 2. 下载安装包
-Write-Host "正在下载安装包（共5个文件）..." -ForegroundColor Yellow
+# 2. 检测 Obsidian 是否已安装
+$obsidianInstalled = (Test-Path "$env:LOCALAPPDATA\Obsidian\Obsidian.exe") -or (Test-Path "$env:ProgramFiles\Obsidian\Obsidian.exe")
+if ($obsidianInstalled) {
+    Write-Host "Obsidian 已安装，跳过下载 Obsidian 安装包" -ForegroundColor Green
+    $fileCount = 2
+} else {
+    $fileCount = 5
+}
+
+# 3. 下载安装包
+Write-Host "正在下载安装包（共${fileCount}个文件）..." -ForegroundColor Yellow
 $base1 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7"
 $base2 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
+$idx = 1
 
 Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part1.zip" -OutFile "part1.zip"
-Write-Host "  [1/5] part1.zip 完成" -ForegroundColor Green
+Write-Host "  [$idx/$fileCount] part1.zip 完成" -ForegroundColor Green; $idx++
 Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part2.zip" -OutFile "part2.zip"
-Write-Host "  [2/5] part2.zip 完成" -ForegroundColor Green
-1..3 | ForEach-Object {
-    Invoke-WebRequest "$base2/Obsidian-win-part$_.bin" -OutFile "Obsidian-win-part$_.bin"
-    Write-Host "  [$($_ + 2)/5] Obsidian-win-part$_.bin 完成" -ForegroundColor Green
+Write-Host "  [$idx/$fileCount] part2.zip 完成" -ForegroundColor Green; $idx++
+if (-not $obsidianInstalled) {
+    1..3 | ForEach-Object {
+        Invoke-WebRequest "$base2/Obsidian-win-part$_.bin" -OutFile "Obsidian-win-part$_.bin"
+        Write-Host "  [$idx/$fileCount] Obsidian-win-part$_.bin 完成" -ForegroundColor Green; $script:idx++
+    }
 }
 
 # 3. 解压
@@ -48,19 +60,22 @@ if (Test-Path $7z) {
     Read-Host "解压完成后按回车继续"
 }
 
-# 4. 合并 Obsidian 分片
-Write-Host "正在合并 Obsidian 安装包..." -ForegroundColor Yellow
-mkdir "$d\install\installers" -Force | Out-Null
-$out = [System.IO.File]::Create("$d\install\installers\Obsidian-1.12.7.exe")
-1..3 | ForEach-Object {
-    $bytes = [System.IO.File]::ReadAllBytes("$d\Obsidian-win-part$_.bin")
-    $out.Write($bytes, 0, $bytes.Length)
+# 5. 合并 Obsidian 分片
+if (-not $obsidianInstalled) {
+    Write-Host "正在合并 Obsidian 安装包..." -ForegroundColor Yellow
+    mkdir "$d\install\installers" -Force | Out-Null
+    $out = [System.IO.File]::Create("$d\install\installers\Obsidian-1.12.7.exe")
+    1..3 | ForEach-Object {
+        $bytes = [System.IO.File]::ReadAllBytes("$d\Obsidian-win-part$_.bin")
+        $out.Write($bytes, 0, $bytes.Length)
+    }
+    $out.Close()
+    Write-Host "合并完成" -ForegroundColor Green
 }
-$out.Close()
-Write-Host "合并完成" -ForegroundColor Green
 
-# 5. 清理临时文件
-Remove-Item part1.zip, part2.zip, Obsidian-win-part1.bin, Obsidian-win-part2.bin, Obsidian-win-part3.bin -Force -ErrorAction SilentlyContinue
+# 6. 清理临时文件
+Remove-Item part1.zip, part2.zip -Force -ErrorAction SilentlyContinue
+Remove-Item Obsidian-win-part1.bin, Obsidian-win-part2.bin, Obsidian-win-part3.bin -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
