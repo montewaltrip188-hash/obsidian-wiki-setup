@@ -17,20 +17,45 @@ cd "$d"
 BASE1="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7"
 BASE2="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 
-echo "正在下载安装包（共4个文件）..."
+# 检测 Obsidian 是否已安装
+DOWNLOAD_OB=true
+if [ -d "/Applications/Obsidian.app" ]; then
+    echo "检测到 Obsidian 已安装，跳过下载 Obsidian 安装包"
+    DOWNLOAD_OB=false
+else
+    printf "是否需要下载 Obsidian 安装包？(Y/n): "
+    read -r OB_CHOICE
+    if [ "$OB_CHOICE" = "n" ] || [ "$OB_CHOICE" = "N" ]; then
+        DOWNLOAD_OB=false
+        echo "跳过 Obsidian 下载"
+    fi
+fi
+
+if [ "$DOWNLOAD_OB" = true ]; then
+    FILE_COUNT=4
+else
+    FILE_COUNT=1
+fi
+
+echo "正在下载安装包（共${FILE_COUNT}个文件）..."
+IDX=1
 curl -L --progress-bar -o "main.zip" "$BASE1/obsidian-wiki-mac-${ARCH}.zip"
-echo "  [1/4] main.zip 完成"
-for i in 1 2 3; do
-    curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$BASE2/Obsidian-mac-part${i}.bin"
-    echo "  [$((i+1))/4] Obsidian-mac-part${i}.bin 完成"
-done
+echo "  [$IDX/$FILE_COUNT] main.zip 完成"; IDX=$((IDX+1))
+if [ "$DOWNLOAD_OB" = true ]; then
+    for i in 1 2 3; do
+        curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$BASE2/Obsidian-mac-part${i}.bin"
+        echo "  [$IDX/$FILE_COUNT] Obsidian-mac-part${i}.bin 完成"; IDX=$((IDX+1))
+    done
+fi
 
 echo "正在解压..."
 unzip -P wiki2026 -o main.zip -d install
 
-echo "正在合并 Obsidian 安装包..."
-mkdir -p install/installers-mac
-cat Obsidian-mac-part*.bin > install/installers-mac/Obsidian-1.12.7.dmg
+if [ "$DOWNLOAD_OB" = true ]; then
+    echo "正在合并 Obsidian 安装包..."
+    mkdir -p install/installers-mac
+    cat Obsidian-mac-part*.bin > install/installers-mac/Obsidian-1.12.7.dmg
+fi
 
 echo "清理临时文件..."
 rm -f main.zip Obsidian-mac-part*.bin
