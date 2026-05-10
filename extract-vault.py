@@ -9,6 +9,13 @@ for info in z.infolist():
     except:
         fn = info.filename
     fn = fn.replace("\\", "/")
+    # 去掉顶层 vault/ 前缀
+    if fn.startswith("vault/"):
+        fn = fn[6:]
+    elif fn == "vault":
+        continue
+    if not fn:
+        continue
     if fn.endswith("/"):
         os.makedirs(os.path.join(dest, fn), exist_ok=True)
     else:
