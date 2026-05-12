@@ -279,15 +279,34 @@ fi
 
 if [ "$SKIP_DEPLOY" = false ]; then
     yellow "  正在解压知识库..."
-    PARENT_DIR=$(dirname "$DEFAULT_VAULT")
-    mkdir -p "$PARENT_DIR"
-    unzip -q -o "$VAULT_ZIP" -d "$PARENT_DIR"
-    EXTRACTED="$PARENT_DIR/vault"
-    if [ -d "$EXTRACTED" ] && [ "$EXTRACTED" != "$DEFAULT_VAULT" ]; then
-        rm -rf "$DEFAULT_VAULT" 2>/dev/null || true
-        mv "$EXTRACTED" "$DEFAULT_VAULT"
+    if [ -d "$DEFAULT_VAULT" ]; then
+        rm -rf "$DEFAULT_VAULT"
     fi
-    green "  知识库已部署到: $DEFAULT_VAULT"
+    # 用 Python 解压以正确处理中文编码和反斜杠路径
+    python3 -c "
+import zipfile, os
+z = zipfile.ZipFile('$VAULT_ZIP')
+dest = '$DEFAULT_VAULT'
+for info in z.infolist():
+    try:
+        fn = info.filename.encode('cp437').decode('gbk')
+    except:
+        fn = info.filename
+    fn = fn.replace(chr(92), '/')
+    if fn.startswith('vault/'):
+        fn = fn[6:]
+    elif fn == 'vault':
+        continue
+    if not fn or fn.endswith('/'):
+        continue
+    path = os.path.join(dest, fn)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'wb') as f:
+        f.write(z.read(info))
+z.close()
+print('知识库已部署到:', dest)
+"
+    green "  知识库部署完成"
 fi
 
 # ----------------------------------------------------------
