@@ -32,14 +32,12 @@ if ($obsidianInstalled) {
         $downloadObsidian = $false
     }
 }
-if ($downloadObsidian) {
-    $fileCount = 5
-} else {
-    Write-Host "跳过 Obsidian 下载" -ForegroundColor Yellow
-    $fileCount = 2
-}
 
-# 3. 下载安装包
+# 3. 计算文件数
+$fileCount = 3
+if ($downloadObsidian) { $fileCount = 6 }
+
+# 4. 下载
 Write-Host "正在下载安装包（共${fileCount}个文件）..." -ForegroundColor Yellow
 $base1 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7"
 $base2 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
@@ -49,6 +47,8 @@ Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part1.zip" -OutFile "part1.zip"
 Write-Host "  [$idx/$fileCount] part1.zip 完成" -ForegroundColor Green; $idx++
 Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part2.zip" -OutFile "part2.zip"
 Write-Host "  [$idx/$fileCount] part2.zip 完成" -ForegroundColor Green; $idx++
+Invoke-WebRequest "$base2/vault.zip" -OutFile "vault.zip"
+Write-Host "  [$idx/$fileCount] vault.zip 完成" -ForegroundColor Green; $idx++
 if ($downloadObsidian) {
     1..3 | ForEach-Object {
         Invoke-WebRequest "$base2/Obsidian-win-part$_.bin" -OutFile "Obsidian-win-part$_.bin"
@@ -56,7 +56,7 @@ if ($downloadObsidian) {
     }
 }
 
-# 3. 解压
+# 5. 解压
 Write-Host "正在解压..." -ForegroundColor Yellow
 if (Test-Path $7z) {
     & $7z x -pwiki2026 -o"$d\install" -y part1.zip | Out-Null
@@ -70,7 +70,11 @@ if (Test-Path $7z) {
     Read-Host "解压完成后按回车继续"
 }
 
-# 5. 合并 Obsidian 分片
+# 6. 复制 vault.zip 到 install 目录
+Move-Item "vault.zip" "$d\install\vault.zip" -Force
+Write-Host "vault.zip 已放入安装目录" -ForegroundColor Green
+
+# 7. 合并 Obsidian 分片
 if ($downloadObsidian) {
     Write-Host "正在合并 Obsidian 安装包..." -ForegroundColor Yellow
     mkdir "$d\install\installers" -Force | Out-Null
@@ -83,7 +87,7 @@ if ($downloadObsidian) {
     Write-Host "合并完成" -ForegroundColor Green
 }
 
-# 6. 清理临时文件
+# 8. 清理
 Remove-Item part1.zip, part2.zip -Force -ErrorAction SilentlyContinue
 Remove-Item Obsidian-win-part1.bin, Obsidian-win-part2.bin, Obsidian-win-part3.bin -Force -ErrorAction SilentlyContinue
 

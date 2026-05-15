@@ -31,16 +31,18 @@ else
     fi
 fi
 
+# 计算文件数: main + vault = 2, +3 if Obsidian
+FILE_COUNT=2
 if [ "$DOWNLOAD_OB" = true ]; then
-    FILE_COUNT=4
-else
-    FILE_COUNT=1
+    FILE_COUNT=5
 fi
 
 echo "正在下载安装包（共${FILE_COUNT}个文件）..."
 IDX=1
 curl -L --progress-bar -o "main.zip" "$BASE1/obsidian-wiki-mac-${ARCH}.zip"
 echo "  [$IDX/$FILE_COUNT] main.zip 完成"; IDX=$((IDX+1))
+curl -L --progress-bar -o "vault.zip" "$BASE2/vault.zip"
+echo "  [$IDX/$FILE_COUNT] vault.zip 完成"; IDX=$((IDX+1))
 if [ "$DOWNLOAD_OB" = true ]; then
     for i in 1 2 3; do
         curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$BASE2/Obsidian-mac-part${i}.bin"
@@ -50,6 +52,8 @@ fi
 
 echo "正在解压..."
 unzip -P wiki2026 -o main.zip -d install
+# vault.zip 复制到 install 目录（由 setup-mac.sh 中用 Python 解压处理）
+mv vault.zip install/
 
 if [ "$DOWNLOAD_OB" = true ]; then
     echo "正在合并 Obsidian 安装包..."
