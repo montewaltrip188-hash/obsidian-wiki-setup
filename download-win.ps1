@@ -1,7 +1,7 @@
 ﻿# Obsidian LLM Wiki - Windows 一键下载脚本
 # 用法: powershell -ExecutionPolicy Bypass -File download-win.ps1
 
-$d = "D:\OB"
+$d = "C:\OB"
 mkdir $d -Force | Out-Null
 cd $d
 
@@ -63,9 +63,9 @@ if (Test-Path $7z) {
     & $7z x -pwiki2026 -o"$d\install" -y part2.zip | Out-Null
     Write-Host "解压完成" -ForegroundColor Green
 } else {
-    Write-Host "请手动解压 D:\OB 下的 part1.zip 和 part2.zip" -ForegroundColor Yellow
+    Write-Host "请手动解压 C:\OB 下的 part1.zip 和 part2.zip" -ForegroundColor Yellow
     Write-Host "  密码: wiki2026" -ForegroundColor Yellow
-    Write-Host "  解压到 D:\OB\install 文件夹" -ForegroundColor Yellow
+    Write-Host "  解压到 C:\OB\install 文件夹" -ForegroundColor Yellow
     Write-Host ""
     Read-Host "解压完成后按回车继续"
 }
