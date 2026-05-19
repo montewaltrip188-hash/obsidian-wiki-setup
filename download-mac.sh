@@ -1,8 +1,9 @@
 #!/bin/bash
 # Obsidian LLM Wiki - Mac 一键下载脚本
-# Apple Silicon: bash download-mac.sh arm64
-# Intel:         bash download-mac.sh x64
-# 不加参数默认 arm64
+# Apple Silicon: curl -sL "https://gitee.com/jiegeng333/obsidian-wiki-setup/raw/master/download-mac.sh" | bash
+# Intel:         curl -sL "https://gitee.com/jiegeng333/obsidian-wiki-setup/raw/master/download-mac.sh" | bash -s x64
+
+set -e
 
 ARCH="${1:-arm64}"
 if [ "$ARCH" != "arm64" ] && [ "$ARCH" != "x64" ]; then
@@ -11,6 +12,7 @@ if [ "$ARCH" != "arm64" ] && [ "$ARCH" != "x64" ]; then
 fi
 
 d=~/Downloads/OB
+rm -rf "$d"
 mkdir -p "$d"
 cd "$d"
 
@@ -31,7 +33,6 @@ else
     fi
 fi
 
-# 计算文件数: main + vault = 2, +3 if Obsidian
 FILE_COUNT=2
 if [ "$DOWNLOAD_OB" = true ]; then
     FILE_COUNT=5
@@ -39,29 +40,75 @@ fi
 
 echo "正在下载安装包（共${FILE_COUNT}个文件）..."
 IDX=1
-curl -L --progress-bar -o "main.zip" "$BASE1/obsidian-wiki-mac-${ARCH}.zip"
-echo "  [$IDX/$FILE_COUNT] main.zip 完成"; IDX=$((IDX+1))
-curl -L --progress-bar -o "vault.zip" "$BASE2/vault.zip"
-echo "  [$IDX/$FILE_COUNT] vault.zip 完成"; IDX=$((IDX+1))
+
+# 下载 main.zip（安装脚本 + Claude Code）
+echo -n "  [$IDX/$FILE_COUNT] 正在下载 main.zip ... "
+if curl -L --progress-bar -o "main.zip" "$BASE1/obsidian-wiki-mac-${ARCH}.zip" && [ -s main.zip ]; then
+    echo "完成 ($(du -h main.zip | cut -f1))"
+else
+    echo "失败"
+    echo "无法下载安装包，请检查网络连接后重试"
+    exit 1
+fi
+IDX=$((IDX+1))
+
+# 下载 vault.zip（知识库模板）
+echo -n "  [$IDX/$FILE_COUNT] 正在下载 vault.zip ... "
+if curl -L --progress-bar -o "vault.zip" "$BASE2/vault.zip" && [ -s vault.zip ]; then
+    echo "完成 ($(du -h vault.zip | cut -f1))"
+else
+    echo "失败"
+    echo "无法下载知识库模板，请检查网络连接后重试"
+    exit 1
+fi
+IDX=$((IDX+1))
+
+# 下载 Obsidian 分片
 if [ "$DOWNLOAD_OB" = true ]; then
     for i in 1 2 3; do
-        curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$BASE2/Obsidian-mac-part${i}.bin"
-        echo "  [$IDX/$FILE_COUNT] Obsidian-mac-part${i}.bin 完成"; IDX=$((IDX+1))
+        echo -n "  [$IDX/$FILE_COUNT] 正在下载 Obsidian-mac-part${i}.bin ... "
+        if curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$BASE2/Obsidian-mac-part${i}.bin" && [ -s "Obsidian-mac-part${i}.bin" ]; then
+            echo "完成 ($(du -h Obsidian-mac-part${i}.bin | cut -f1))"
+        else
+            echo "失败"
+            exit 1
+        fi
+        IDX=$((IDX+1))
     done
 fi
 
-echo "正在解压..."
-unzip -P wiki2026 -o main.zip -d install
-# vault.zip 复制到 install 目录（由 setup-mac.sh 中用 Python 解压处理）
-mv vault.zip install/
-
-if [ "$DOWNLOAD_OB" = true ]; then
-    echo "正在合并 Obsidian 安装包..."
-    mkdir -p install/installers-mac
-    cat Obsidian-mac-part*.bin > install/installers-mac/Obsidian-1.12.7.dmg
+# 验证 main.zip 是有效的 zip
+if ! unzip -t -P wiki2026 main.zip > /dev/null 2>&1; then
+    echo "main.zip 文件损坏，请重试"
+    exit 1
 fi
 
-echo "清理临时文件..."
+# 解压
+echo "正在解压 main.zip ..."
+unzip -q -P wiki2026 -o main.zip -d install
+
+# 验证解压结果
+if [ ! -f "install/setup-mac.sh" ]; then
+    echo "解压失败，请重试"
+    echo "install 目录内容:"
+    ls -la install/
+    exit 1
+fi
+echo "解压完成: $(ls install/ | tr '\n' ' ')"
+
+# vault.zip 放入 install
+mv vault.zip install/
+echo "vault.zip 已放入安装目录"
+
+# 合并 Obsidian 分片
+if [ "$DOWNLOAD_OB" = true ]; then
+    echo "正在合并 Obsidian 安装包 ..."
+    mkdir -p install/installers-mac
+    cat Obsidian-mac-part*.bin > install/installers-mac/Obsidian-1.12.7.dmg
+    echo "合并完成 ($(du -h install/installers-mac/Obsidian-1.12.7.dmg | cut -f1))"
+fi
+
+# 清理
 rm -f main.zip Obsidian-mac-part*.bin
 
 echo ""
