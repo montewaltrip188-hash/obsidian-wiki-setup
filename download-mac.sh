@@ -16,8 +16,9 @@ rm -rf "$d"
 mkdir -p "$d"
 cd "$d"
 
-BASE1="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7"
-BASE2="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
+# 使用 raw 链接，不走 Gitee Release CDN（国内可访问）
+RAW="https://gitee.com/jiegeng333/obsidian-wiki-setup/raw/master"
+REL="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 
 # 检测 Obsidian 是否已安装
 DOWNLOAD_OB=true
@@ -41,9 +42,9 @@ fi
 echo "正在下载安装包（共${FILE_COUNT}个文件）..."
 IDX=1
 
-# 下载 main.zip（安装脚本 + Claude Code）
+# 下载 main.zip（安装脚本 + Claude Code）—— raw 链接
 echo -n "  [$IDX/$FILE_COUNT] 正在下载 main.zip ... "
-if curl -L --progress-bar -o "main.zip" "$BASE1/obsidian-wiki-mac-${ARCH}.zip" && [ -s main.zip ]; then
+if curl --progress-bar -o "main.zip" "$RAW/obsidian-wiki-mac-${ARCH}.zip" && [ -s main.zip ]; then
     echo "完成 ($(du -h main.zip | cut -f1))"
 else
     echo "失败"
@@ -52,9 +53,9 @@ else
 fi
 IDX=$((IDX+1))
 
-# 下载 vault.zip（知识库模板）
+# 下载 vault.zip（知识库模板）—— raw 链接
 echo -n "  [$IDX/$FILE_COUNT] 正在下载 vault.zip ... "
-if curl -L --progress-bar -o "vault.zip" "$BASE2/vault.zip" && [ -s vault.zip ]; then
+if curl --progress-bar -o "vault.zip" "$RAW/vault.zip" && [ -s vault.zip ]; then
     echo "完成 ($(du -h vault.zip | cut -f1))"
 else
     echo "失败"
@@ -63,15 +64,17 @@ else
 fi
 IDX=$((IDX+1))
 
-# 下载 Obsidian 分片
+# 下载 Obsidian 分片（仍走 Release，失败时提示手动安装）
 if [ "$DOWNLOAD_OB" = true ]; then
     for i in 1 2 3; do
         echo -n "  [$IDX/$FILE_COUNT] 正在下载 Obsidian-mac-part${i}.bin ... "
-        if curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$BASE2/Obsidian-mac-part${i}.bin" && [ -s "Obsidian-mac-part${i}.bin" ]; then
+        if curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$REL/Obsidian-mac-part${i}.bin" && [ -s "Obsidian-mac-part${i}.bin" ]; then
             echo "完成 ($(du -h Obsidian-mac-part${i}.bin | cut -f1))"
         else
             echo "失败"
-            exit 1
+            echo "Obsidian 安装包下载失败，请稍后手动安装: https://obsidian.md"
+            DOWNLOAD_OB=false
+            break
         fi
         IDX=$((IDX+1))
     done
@@ -96,7 +99,7 @@ if [ ! -f "install/setup-mac.sh" ]; then
 fi
 echo "解压完成: $(ls install/ | tr '\n' ' ')"
 
-# vault.zip 放入 install
+# vault.zip 放入 install（覆盖 main.zip 中的旧版本）
 mv vault.zip install/
 echo "vault.zip 已放入安装目录"
 
