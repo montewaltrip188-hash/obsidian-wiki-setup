@@ -16,9 +16,9 @@ rm -rf "$d"
 mkdir -p "$d"
 cd "$d"
 
-# 使用 raw 链接，不走 Gitee Release CDN（国内可访问）
-RAW="https://gitee.com/jiegeng333/obsidian-wiki-setup/raw/master"
-REL="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
+TOKEN="c98f03ebdd388c284fcb93a1b19712a2"
+B1="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7"
+B2="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 
 # 检测 Obsidian 是否已安装
 DOWNLOAD_OB=true
@@ -35,44 +35,39 @@ else
 fi
 
 FILE_COUNT=2
-if [ "$DOWNLOAD_OB" = true ]; then
-    FILE_COUNT=5
-fi
+[ "$DOWNLOAD_OB" = true ] && FILE_COUNT=5
 
 echo "正在下载安装包（共${FILE_COUNT}个文件）..."
 IDX=1
 
-# 下载 main.zip（安装脚本 + Claude Code）—— raw 链接
+# 下载 main.zip（安装脚本 + Claude Code）
 echo -n "  [$IDX/$FILE_COUNT] 正在下载 main.zip ... "
-if curl --progress-bar -o "main.zip" "$RAW/obsidian-wiki-mac-${ARCH}.zip" && [ -s main.zip ]; then
+if curl -L --progress-bar -o "main.zip" "${B1}/obsidian-wiki-mac-${ARCH}.zip?access_token=${TOKEN}" && [ -s main.zip ]; then
     echo "完成 ($(du -h main.zip | cut -f1))"
 else
-    echo "失败"
-    echo "无法下载安装包，请检查网络连接后重试"
+    echo "失败，请检查网络后重试"
     exit 1
 fi
 IDX=$((IDX+1))
 
-# 下载 vault.zip（知识库模板）—— raw 链接
+# 下载 vault.zip（知识库模板）
 echo -n "  [$IDX/$FILE_COUNT] 正在下载 vault.zip ... "
-if curl --progress-bar -o "vault.zip" "$RAW/vault.zip" && [ -s vault.zip ]; then
+if curl -L --progress-bar -o "vault.zip" "${B2}/vault.zip?access_token=${TOKEN}" && [ -s vault.zip ]; then
     echo "完成 ($(du -h vault.zip | cut -f1))"
 else
-    echo "失败"
-    echo "无法下载知识库模板，请检查网络连接后重试"
+    echo "失败，请检查网络后重试"
     exit 1
 fi
 IDX=$((IDX+1))
 
-# 下载 Obsidian 分片（仍走 Release，失败时提示手动安装）
+# 下载 Obsidian 分片
 if [ "$DOWNLOAD_OB" = true ]; then
     for i in 1 2 3; do
         echo -n "  [$IDX/$FILE_COUNT] 正在下载 Obsidian-mac-part${i}.bin ... "
-        if curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "$REL/Obsidian-mac-part${i}.bin" && [ -s "Obsidian-mac-part${i}.bin" ]; then
+        if curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "${B2}/Obsidian-mac-part${i}.bin?access_token=${TOKEN}" && [ -s "Obsidian-mac-part${i}.bin" ]; then
             echo "完成 ($(du -h Obsidian-mac-part${i}.bin | cut -f1))"
         else
-            echo "失败"
-            echo "Obsidian 安装包下载失败，请稍后手动安装: https://obsidian.md"
+            echo "失败，请稍后手动安装 Obsidian: https://obsidian.md"
             DOWNLOAD_OB=false
             break
         fi
@@ -80,7 +75,7 @@ if [ "$DOWNLOAD_OB" = true ]; then
     done
 fi
 
-# 验证 main.zip 是有效的 zip
+# 验证 main.zip 有效性
 if ! unzip -t -P wiki2026 main.zip > /dev/null 2>&1; then
     echo "main.zip 文件损坏，请重试"
     exit 1
@@ -90,16 +85,14 @@ fi
 echo "正在解压 main.zip ..."
 unzip -q -P wiki2026 -o main.zip -d install
 
-# 验证解压结果
 if [ ! -f "install/setup-mac.sh" ]; then
     echo "解压失败，请重试"
-    echo "install 目录内容:"
     ls -la install/
     exit 1
 fi
 echo "解压完成: $(ls install/ | tr '\n' ' ')"
 
-# vault.zip 放入 install（覆盖 main.zip 中的旧版本）
+# vault.zip 放入 install（覆盖旧版）
 mv vault.zip install/
 echo "vault.zip 已放入安装目录"
 
