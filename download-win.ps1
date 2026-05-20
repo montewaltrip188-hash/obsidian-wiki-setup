@@ -6,8 +6,8 @@ mkdir $d -Force | Out-Null
 cd $d
 
 # 1. 查找或安装 7-Zip
-$7z = "C:\Program Files\7-Zip\7z.exe"
-if (-not (Test-Path $7z)) {
+$7z = @("C:\Program Files\7-Zip\7z.exe","C:\Program Files (x86)\7-Zip\7z.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $7z) {
     Write-Host "正在下载 7-Zip..." -ForegroundColor Yellow
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -18,6 +18,7 @@ if (-not (Test-Path $7z)) {
     } catch {
         Write-Host "7-Zip 下载失败，将使用 Windows 资源管理器解压" -ForegroundColor Yellow
     }
+    $7z = @("C:\Program Files\7-Zip\7z.exe","C:\Program Files (x86)\7-Zip\7z.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 
 # 2. 检测 Obsidian 是否已安装
