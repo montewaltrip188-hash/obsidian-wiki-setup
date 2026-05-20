@@ -1,7 +1,7 @@
-﻿# Obsidian LLM Wiki - Windows 一键下载脚本
+# Obsidian LLM Wiki - Windows 一键下载脚本
 # 用法: powershell -ExecutionPolicy Bypass -File download-win.ps1
 
-$d = "C:\OB"
+$d = if (Test-Path "D:\") { "D:\OB" } else { "C:\OB" }
 mkdir $d -Force | Out-Null
 cd $d
 
@@ -39,13 +39,13 @@ if ($downloadObsidian) { $fileCount = 6 }
 
 # 4. 下载
 Write-Host "正在下载安装包（共${fileCount}个文件）..." -ForegroundColor Yellow
-$base1 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7"
+$base1 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.9"
 $base2 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 $idx = 1
 
-Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part1.zip" -OutFile "part1.zip"
+Invoke-WebRequest "$base1/obsidian-wiki-v1.9-part1.zip" -OutFile "part1.zip"
 Write-Host "  [$idx/$fileCount] part1.zip 完成" -ForegroundColor Green; $idx++
-Invoke-WebRequest "$base1/obsidian-wiki-v1.4-part2.zip" -OutFile "part2.zip"
+Invoke-WebRequest "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7/obsidian-wiki-v1.4-part2.zip" -OutFile "part2.zip"
 Write-Host "  [$idx/$fileCount] part2.zip 完成" -ForegroundColor Green; $idx++
 Invoke-WebRequest "$base2/vault.zip" -OutFile "vault.zip"
 Write-Host "  [$idx/$fileCount] vault.zip 完成" -ForegroundColor Green; $idx++
