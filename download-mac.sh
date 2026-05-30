@@ -17,7 +17,7 @@ mkdir -p "$d"
 cd "$d"
 
 TOKEN="c98f03ebdd388c284fcb93a1b19712a2"
-B1="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7"
+B1="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.0"
 B2="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 
 # 检测 Obsidian 是否已安装
