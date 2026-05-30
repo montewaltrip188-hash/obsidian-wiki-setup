@@ -16,7 +16,7 @@ rm -rf "$d"
 mkdir -p "$d"
 cd "$d"
 
-TOKEN="c98f03ebdd388c284fcb93a1b19712a2"
+TOKEN="5e28dbb7eff603a08db961ca67dc32bd"
 B1="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.0"
 B2="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 
