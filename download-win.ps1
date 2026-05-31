@@ -1,4 +1,4 @@
-# Obsidian LLM Wiki - Windows 一键下载脚本
+﻿# Obsidian LLM Wiki - Windows 一键下载脚本
 # 用法: powershell -ExecutionPolicy Bypass -File download-win.ps1
 
 $d = if (Test-Path "D:\") { "D:\OB" } else { "C:\OB" }
