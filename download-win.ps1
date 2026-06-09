@@ -41,19 +41,19 @@ if ($downloadObsidian) { $fileCount = 6 }
 # 4. 下载
 Write-Host "正在下载安装包（共${fileCount}个文件）..." -ForegroundColor Yellow
 $token = "5e28dbb7eff603a08db961ca67dc32bd"
-$base1 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.0"
-$base2 = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
+$base = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.1"
+$baseObs = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 $idx = 1
 
-Invoke-WebRequest "$base1/obsidian-wiki-v2.0-part1.zip?access_token=$token" -OutFile "part1.zip"
+Invoke-WebRequest "$base/obsidian-wiki-v2.1-part1.zip?access_token=$token" -OutFile "part1.zip"
 Write-Host "  [$idx/$fileCount] part1.zip 完成" -ForegroundColor Green; $idx++
-Invoke-WebRequest "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.7/obsidian-wiki-v1.4-part2.zip?access_token=$token" -OutFile "part2.zip"
+Invoke-WebRequest "$base/obsidian-wiki-v2.1-part2.zip?access_token=$token" -OutFile "part2.zip"
 Write-Host "  [$idx/$fileCount] part2.zip 完成" -ForegroundColor Green; $idx++
-Invoke-WebRequest "$base2/vault.zip?access_token=$token" -OutFile "vault.zip"
-Write-Host "  [$idx/$fileCount] vault.zip 完成" -ForegroundColor Green; $idx++
+Invoke-WebRequest "$base/obsidian-wiki-v2.1-part3.zip?access_token=$token" -OutFile "part3.zip"
+Write-Host "  [$idx/$fileCount] part3.zip 完成" -ForegroundColor Green; $idx++
 if ($downloadObsidian) {
     1..3 | ForEach-Object {
-        Invoke-WebRequest "$base2/Obsidian-win-part$_.bin?access_token=$token" -OutFile "Obsidian-win-part$_.bin"
+        Invoke-WebRequest "$baseObs/Obsidian-win-part$_.bin?access_token=$token" -OutFile "Obsidian-win-part$_.bin"
         Write-Host "  [$idx/$fileCount] Obsidian-win-part$_.bin 完成" -ForegroundColor Green; $script:idx++
     }
 }
@@ -63,20 +63,17 @@ Write-Host "正在解压..." -ForegroundColor Yellow
 if (Test-Path $7z) {
     & $7z x -pwiki2026 -o"$d\install" -y part1.zip | Out-Null
     & $7z x -pwiki2026 -o"$d\install" -y part2.zip | Out-Null
+    & $7z x -pwiki2026 -o"$d\install" -y part3.zip | Out-Null
     Write-Host "解压完成" -ForegroundColor Green
 } else {
-    Write-Host "请手动解压 C:\OB 下的 part1.zip 和 part2.zip" -ForegroundColor Yellow
+    Write-Host "请手动解压 C:\OB 下的 part1.zip / part2.zip / part3.zip" -ForegroundColor Yellow
     Write-Host "  密码: wiki2026" -ForegroundColor Yellow
     Write-Host "  解压到 C:\OB\install 文件夹" -ForegroundColor Yellow
     Write-Host ""
     Read-Host "解压完成后按回车继续"
 }
 
-# 6. 复制 vault.zip 到 install 目录
-Move-Item "vault.zip" "$d\install\vault.zip" -Force
-Write-Host "vault.zip 已放入安装目录" -ForegroundColor Green
-
-# 7. 合并 Obsidian 分片
+# 6. 合并 Obsidian 分片
 if ($downloadObsidian) {
     Write-Host "正在合并 Obsidian 安装包..." -ForegroundColor Yellow
     mkdir "$d\install\installers" -Force | Out-Null
@@ -89,8 +86,8 @@ if ($downloadObsidian) {
     Write-Host "合并完成" -ForegroundColor Green
 }
 
-# 8. 清理
-Remove-Item part1.zip, part2.zip -Force -ErrorAction SilentlyContinue
+# 7. 清理
+Remove-Item part1.zip, part2.zip, part3.zip -Force -ErrorAction SilentlyContinue
 Remove-Item Obsidian-win-part1.bin, Obsidian-win-part2.bin, Obsidian-win-part3.bin -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
