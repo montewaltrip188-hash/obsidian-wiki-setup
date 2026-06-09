@@ -5,6 +5,10 @@
 
 set -e
 
+green()  { printf "\033[32m%s\033[0m\n" "$1"; }
+yellow() { printf "\033[33m%s\033[0m\n" "$1"; }
+red()    { printf "\033[31m%s\033[0m\n" "$1"; }
+
 ARCH="${1:-arm64}"
 if [ "$ARCH" != "arm64" ] && [ "$ARCH" != "x64" ]; then
     echo "用法: bash download-mac.sh [arm64|x64]"
@@ -17,8 +21,7 @@ mkdir -p "$d"
 cd "$d"
 
 TOKEN="5e28dbb7eff603a08db961ca67dc32bd"
-B1="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.0"
-B2="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
+BASE="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.1"
 
 # 检测 Obsidian 是否已安装
 DOWNLOAD_OB=true
@@ -34,46 +37,95 @@ else
     fi
 fi
 
-FILE_COUNT=2
-[ "$DOWNLOAD_OB" = true ] && FILE_COUNT=5
+# 选择 AI 编码工具
+DOWNLOAD_CC=false
+DOWNLOAD_CODEX=false
+echo ""
+yellow "请选择要安装的 AI 编码工具:"
+echo "  1. Claude Code (推荐)"
+echo "  2. Codex (OpenAI)"
+echo "  3. 两者都安装"
+echo "  4. 都不安装（稍后手动安装）"
+printf "请输入编号 (默认 1): "
+read -r TOOL_CHOICE
+[ -z "$TOOL_CHOICE" ] && TOOL_CHOICE="1"
+case "$TOOL_CHOICE" in
+    1) DOWNLOAD_CC=true ;;
+    2) DOWNLOAD_CODEX=true ;;
+    3) DOWNLOAD_CC=true; DOWNLOAD_CODEX=true ;;
+    4) ;;
+    *) DOWNLOAD_CC=true ;;
+esac
 
-echo "正在下载安装包（共${FILE_COUNT}个文件）..."
-IDX=1
+FILE_COUNT=1
+[ "$DOWNLOAD_CC" = true ] && FILE_COUNT=$((FILE_COUNT+1))
+[ "$DOWNLOAD_CODEX" = true ] && FILE_COUNT=$((FILE_COUNT+1))
+[ "$DOWNLOAD_OB" = true ] && FILE_COUNT=$((FILE_COUNT+3))
 
-# 下载 main.zip（安装脚本 + Claude Code）
-echo -n "  [$IDX/$FILE_COUNT] 正在下载 main.zip ... "
-if curl -L --progress-bar -o "main.zip" "${B1}/obsidian-wiki-mac-${ARCH}.zip?access_token=${TOKEN}" && [ -s main.zip ]; then
-    echo "完成 ($(du -h main.zip | cut -f1))"
-else
-    echo "失败，请检查网络后重试"
-    exit 1
+echo "正在并行下载安装包（共${FILE_COUNT}个文件）..."
+
+# 并行下载所有文件
+PIDS=""
+NAMES=""
+
+curl -L -s -o "main.zip" "${BASE}/obsidian-wiki-mac-part1.zip?access_token=${TOKEN}" &
+PIDS="$PIDS $!"
+NAMES="main.zip"
+
+if [ "$DOWNLOAD_CC" = true ]; then
+    curl -L -s -o "claude-part.zip" "${BASE}/obsidian-wiki-mac-part2-${ARCH}.zip?access_token=${TOKEN}" &
+    PIDS="$PIDS $!"
+    NAMES="$NAMES claude-part.zip"
 fi
-IDX=$((IDX+1))
 
-# 下载 vault.zip（知识库模板）
-echo -n "  [$IDX/$FILE_COUNT] 正在下载 vault.zip ... "
-if curl -L --progress-bar -o "vault.zip" "${B2}/vault.zip?access_token=${TOKEN}" && [ -s vault.zip ]; then
-    echo "完成 ($(du -h vault.zip | cut -f1))"
-else
-    echo "失败，请检查网络后重试"
-    exit 1
+if [ "$DOWNLOAD_CODEX" = true ]; then
+    if [ "$ARCH" = "arm64" ]; then
+        curl -L -s -o "codex-part.zip" "${BASE}/codex-mac-arm64.zip?access_token=${TOKEN}" &
+        PIDS="$PIDS $!"
+        NAMES="$NAMES codex-part.zip"
+    else
+        echo "  [提示] Codex Intel Mac 版暂未打包，安装时将在线安装"
+        FILE_COUNT=$((FILE_COUNT-1))
+    fi
 fi
-IDX=$((IDX+1))
 
-# 下载 Obsidian 分片
 if [ "$DOWNLOAD_OB" = true ]; then
     for i in 1 2 3; do
-        echo -n "  [$IDX/$FILE_COUNT] 正在下载 Obsidian-mac-part${i}.bin ... "
-        if curl -L --progress-bar -o "Obsidian-mac-part${i}.bin" "${B2}/Obsidian-mac-part${i}.bin?access_token=${TOKEN}" && [ -s "Obsidian-mac-part${i}.bin" ]; then
-            echo "完成 ($(du -h Obsidian-mac-part${i}.bin | cut -f1))"
-        else
-            echo "失败，请稍后手动安装 Obsidian: https://obsidian.md"
-            DOWNLOAD_OB=false
-            break
-        fi
-        IDX=$((IDX+1))
+        curl -L -s -o "Obsidian-mac-part${i}.bin" "${BASE}/Obsidian-mac-part${i}.bin?access_token=${TOKEN}" &
+        PIDS="$PIDS $!"
+        NAMES="$NAMES Obsidian-mac-part${i}.bin"
     done
 fi
+
+# 等待所有下载完成并检查结果（临时关闭 set -e，避免 wait 失败直接退出）
+set +e
+FAILED=""
+IDX=1
+for PID in $PIDS; do
+    NAME=$(echo "$NAMES" | cut -d' ' -f$IDX)
+    if wait $PID && [ -s "$NAME" ]; then
+        echo "  [$IDX/$FILE_COUNT] $NAME 完成 ($(du -h "$NAME" | cut -f1))"
+    else
+        echo "  [$IDX/$FILE_COUNT] $NAME 失败"
+        FAILED="$FAILED $NAME"
+    fi
+    IDX=$((IDX+1))
+done
+
+if [ -n "$FAILED" ]; then
+    echo "以下文件下载失败:$FAILED"
+    echo "请检查网络后重试"
+    # main.zip 是必须的，失败则退出
+    if echo "$FAILED" | grep -q "main.zip"; then
+        exit 1
+    fi
+    # CC/Codex 失败仅警告，Obsidian 失败则跳过
+    if echo "$FAILED" | grep -q "Obsidian"; then
+        echo "将跳过 Obsidian 安装包，请稍后手动安装: https://obsidian.md"
+        DOWNLOAD_OB=false
+    fi
+fi
+set -e
 
 # 验证 main.zip 有效性
 if ! unzip -t -P wiki2026 main.zip > /dev/null 2>&1; then
@@ -85,16 +137,22 @@ fi
 echo "正在解压 main.zip ..."
 unzip -q -P wiki2026 -o main.zip -d install
 
+if [ -f "claude-part.zip" ]; then
+    echo "正在解压 claude-${ARCH} ..."
+    unzip -q -P wiki2026 -o claude-part.zip -d install
+fi
+
+if [ -f "codex-part.zip" ]; then
+    echo "正在解压 codex-${ARCH} ..."
+    unzip -q -P wiki2026 -o codex-part.zip -d install
+fi
+
 if [ ! -f "install/setup-mac.sh" ]; then
     echo "解压失败，请重试"
     ls -la install/
     exit 1
 fi
 echo "解压完成: $(ls install/ | tr '\n' ' ')"
-
-# vault.zip 放入 install（覆盖旧版）
-mv vault.zip install/
-echo "vault.zip 已放入安装目录"
 
 # 合并 Obsidian 分片
 if [ "$DOWNLOAD_OB" = true ]; then
@@ -105,7 +163,7 @@ if [ "$DOWNLOAD_OB" = true ]; then
 fi
 
 # 清理
-rm -f main.zip Obsidian-mac-part*.bin
+rm -f main.zip claude-part.zip codex-part.zip Obsidian-mac-part*.bin
 
 echo ""
 echo "============================================"
