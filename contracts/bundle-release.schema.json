@@ -7,7 +7,7 @@
   "properties": {
     "manifest_format": {"const": 1},
     "release_state": {"enum": ["unreleased_candidate", "stable"]},
-    "bundle_version": {"type": ["string", "null"]},
+    "bundle_version": {"type": ["string", "null"], "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "product_schema_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "wiki_skills_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "repositories": {

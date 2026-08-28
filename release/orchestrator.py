@@ -271,7 +271,7 @@ def plan_release(args: argparse.Namespace) -> dict:
     }
     if not keyword_runtime_ready:
         next_action = "runtime_provisioning_required"
-    elif release_contract.get("release_state") == "unreleased_candidate":
+    elif not release_contract.get("bundle_version"):
         next_action = "version_approval_required"
     else:
         next_action = "run_approval_required"
@@ -283,7 +283,11 @@ def plan_release(args: argparse.Namespace) -> dict:
         "release_gates": release_gates,
         "release_state": release_contract.get("release_state"),
         "sources": {
-            name: {key: value for key, value in clone.items() if key != "clone"}
+            name: {
+                key: value
+                for key, value in clone.items()
+                if key not in {"clone", "repo"}
+            }
             for name, clone in clones.items()
         },
         "status": "planned",

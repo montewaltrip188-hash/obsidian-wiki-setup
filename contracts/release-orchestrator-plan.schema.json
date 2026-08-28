@@ -33,7 +33,9 @@
             "error": {"type": ["string", "null"]},
             "offline_baseline": {"const": "keyword"},
             "ready_requires": {"type": "array", "items": {"type": "string"}},
-            "status": {"enum": ["ready", "blocked"]}
+            "runtime_id": {"type": ["string", "null"]},
+            "status": {"enum": ["ready", "blocked"]},
+            "targets": {"type": ["array", "null"], "items": {"type": "string"}}
           }
         }
       }

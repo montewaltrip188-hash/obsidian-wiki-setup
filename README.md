@@ -97,7 +97,7 @@ Vault 部署流程固定为：
 
 `plan` 只读取产品管理路径，输出三方差异、逐文件哈希、审批标记和稳定 `plan_id`；客户知识、日志、输出、索引、密钥和本地状态均不扫描、不修改。旧客户缺少 `.juanyong-ai/product-state.json` 时只返回 `legacy_adoption_required`，不会自动写入状态或擅自纳管。
 
-当前仓库内的 `release/bundle-release.json` 故意保持 `unreleased_candidate` 且不分配版本。Builder 会把它与三仓精确来源合成为客户候选根目录的 `bundle-manifest.json`，避免让仓库内文件自引用尚未产生的 commit 或 candidate ID。版本获批并把发布合同切换为 `stable` 前，`check`、`plan` 和 `apply` 都会以 `BUNDLE_VERSION_UNASSIGNED` 停止。U1 的只读边界见 `contracts/read-only-vault-update-v1.md`。
+当前仓库内的 bundle `2.1.0` 已获人工批准，但 `release/bundle-release.json` 仍保持 `unreleased_candidate`。Builder 会把它与三仓精确来源合成为客户候选根目录的 `bundle-manifest.json`，避免让仓库内文件自引用尚未产生的 commit 或 candidate ID。切换为 `stable` 前，客户侧 `check`、`plan` 和 `apply` 仍会停止，不能把发布候选当成正式升级包。U1 的只读边界见 `contracts/read-only-vault-update-v1.md`。
 
 ## U2：审批绑定的事务更新
 
@@ -117,7 +117,11 @@ U3 用 `scripts/joint-update.ps1`（Windows）或 `scripts/joint-update.sh`（ma
 
 ## D2：只读三仓发布计划
 
-维护者使用 `release/orchestrator.py plan` 冻结产品、Skill 与安装器的三个精确 40 位 commit。编排器只读来源仓库，在新建的外部 workspace 中建立 detached clone，为 Windows 与 macOS 各构建两次并验证字节可复现候选，最后写出带 seal 的 `release-plan.json`。`status` 只读检查 clone 与候选资产是否漂移。该阶段不 commit、tag、push、创建 Release、覆盖安装资产或更新 stable 指针；候选包内置并验签 `cpython-3.12.14+20260825` 三平台离线关键词 Query 运行时，客户端不联网补包、不修改系统 Python。运行时合同未闭合时返回 `runtime_provisioning_required`，闭合后才允许进入 `version_approval_required`。完整合同见 `contracts/release-orchestrator-v1.md`。
+维护者使用 `release/orchestrator.py plan` 冻结产品、Skill 与安装器的三个精确 40 位 commit。编排器只读来源仓库，在新建的外部 workspace 中建立 detached clone，为 Windows 与 macOS 各构建两次并验证字节可复现候选，最后写出带 seal 的 `release-plan.json`。`status` 只读检查 clone 与候选资产是否漂移。该阶段不 commit、tag、push、创建 Release、覆盖安装资产或更新 stable 指针；候选包内置并验签 `cpython-3.12.14+20260825` 三平台离线关键词 Query 运行时，客户端不联网补包、不修改系统 Python。运行时未闭合返回 `runtime_provisioning_required`，版本未分配返回 `version_approval_required`，bundle `2.1.0` 已获批准后返回 `run_approval_required`。完整合同见 `contracts/release-orchestrator-v1.md`。
+
+## D3：真机、证明与发布签名
+
+D3 使用 `release/d3_candidate.py preflight / run` 绑定 D2 `plan_id`、候选 SHA-256、真实 CPU 架构、离线 Query、事务安装、验证和撤销回执。`.github/workflows/d3-macos-candidate.yml` 在 Intel 与 Apple Silicon GitHub 托管真机上运行，并为两份验收回执生成 GitHub artifact attestation。三平台回执齐全后，`release/d3_release.py prepare` 组装两平台候选、SBOM、D2 计划和回执，并绑定预先确认的生产公钥指纹；维护者再用仓库外至少 3072 位 RSA 私钥签署规范化 manifest，最后由 `d3_release.py verify` 验证签名、公钥指纹、文件集合、长度、摘要和全部证据的交叉绑定。完整合同见 `contracts/d3-release-candidate-v1.md`。
 
 ## Skill 安装位置
 
@@ -143,4 +147,4 @@ Claude Code 与 Codex 指向同一份物理版本树。安装器支持 `plan / i
 
 D2-RUNTIME 本地候选已闭合三平台解释器、锁定依赖、许可证、SBOM、事务安装和纯合成关键词 Query 探针；向量检索继续保持可选。客户端不联网补包、不修改系统 Python，也不使用客户内容目录做运行时验收。
 
-bundle 仍为未分配版本的 `unreleased_candidate`。在完成精确三仓候选的独立安装验收、macOS 双架构实机/CI 验收和后续版本门禁前，不得标记为 stable，不得 tag、push 或发布。
+bundle `2.1.0` 仍为 `unreleased_candidate`。在 macOS 双架构真实 CI 回执、GitHub 证明与生产 RSA 签名全部闭合前，不得标记为 stable，不得 tag、push 或发布。

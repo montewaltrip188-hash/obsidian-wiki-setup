@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/d3-release-manifest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle_version", "files", "gates", "manifest_format", "plan_id", "release_state", "required_signature", "sources"],
+  "properties": {
+    "bundle_version": {"const": "2.1.0"},
+    "files": {
+      "type": "array",
+      "minItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["media_type", "path", "role", "sha256", "size"],
+        "properties": {
+          "media_type": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "role": {"enum": ["candidate", "sbom", "d2_plan", "acceptance_receipt", "provenance_attestation"]},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "gates": {"type": "object"},
+    "manifest_format": {"const": 1},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "release_state": {"const": "unreleased_candidate"},
+    "required_signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "file", "key_id"],
+      "properties": {
+        "algorithm": {"const": "RSA-SHA256-PKCS1-v1_5"},
+        "file": {"const": "release-manifest.sig"},
+        "key_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "sources": {"type": "object"}
+  }
+}

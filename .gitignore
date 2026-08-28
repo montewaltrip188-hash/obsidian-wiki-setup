@@ -9,6 +9,9 @@ activation-private-key*.pfx
 activation-private-key*.key
 issuer-private/
 activation-codes.*
+release-signing-private*
+release-signing-passphrase*
+release-signing-private/
 
 # 本地组装与验收输出
 staging/

@@ -36,7 +36,9 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def make_three_repositories(root: Path, *, runtime_ready: bool = False):
+def make_three_repositories(
+    root: Path, *, runtime_ready: bool = False, bundle_version: str | None = None
+):
     skill_files = {
         "VERSION": "2.1.0\n",
         "core/design-juan-wiki/SKILL.md": "design\n",
@@ -93,6 +95,7 @@ def make_three_repositories(root: Path, *, runtime_ready: bool = False):
     ).read_text(encoding="utf-8")
     release = json.loads(installer_files["release/bundle-release.json"])
     release["wiki_skills_version"] = "2.1.0"
+    release["bundle_version"] = bundle_version
     installer_files["release/bundle-release.json"] = json.dumps(release) + "\n"
     runtime_bom = json.loads(installer_files["contracts/offline-keyword-runtime-bom.json"])
     lifecycle_defaults = {
@@ -137,6 +140,27 @@ def make_three_repositories(root: Path, *, runtime_ready: bool = False):
 
 
 class ReleaseOrchestratorTests(unittest.TestCase):
+    def test_approved_bundle_version_advances_to_d3_run_approval(self):
+        with tempfile.TemporaryDirectory(prefix="d3-orchestrator-ready-") as temporary:
+            root = Path(temporary)
+            repositories = make_three_repositories(
+                root, runtime_ready=True, bundle_version="2.1.0"
+            )
+            planned = run_cli(
+                "plan",
+                "--product-repo", repositories["product"][0],
+                "--product-ref", repositories["product"][1],
+                "--skill-repo", repositories["skill"][0],
+                "--skill-ref", repositories["skill"][1],
+                "--installer-repo", repositories["installer"][0],
+                "--installer-ref", repositories["installer"][1],
+                "--workspace", root / "workspace",
+            )
+
+            self.assertEqual("2.1.0", planned["bundle_version"])
+            self.assertEqual("unreleased_candidate", planned["release_state"])
+            self.assertEqual("run_approval_required", planned["next_action"])
+
     def test_ready_runtime_gate_advances_only_to_version_approval(self):
         with tempfile.TemporaryDirectory(prefix="d2-orchestrator-ready-") as temporary:
             root = Path(temporary)
@@ -193,6 +217,7 @@ class ReleaseOrchestratorTests(unittest.TestCase):
             for name, (_repository, commit, tree) in repositories.items():
                 self.assertEqual(commit, planned["sources"][name]["commit"])
                 self.assertEqual(tree, planned["sources"][name]["tree"])
+                self.assertNotIn("repo", planned["sources"][name])
             for platform, candidate in planned["candidates"].items():
                 self.assertTrue(candidate["reproducible"])
                 first = workspace / candidate["first_candidate_zip"]

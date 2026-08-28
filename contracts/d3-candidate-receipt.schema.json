@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/d3-candidate-receipt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["architecture", "bundle_version", "candidate_id", "candidate_sha256", "dependencies", "install_status", "plan_id", "query_status", "receipt_sha256", "receipt_type", "runner", "runtime_id", "schema_version", "status", "target", "undo_status", "verify_status"],
+  "properties": {
+    "architecture": {"type": "string", "minLength": 1},
+    "bundle_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "candidate_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python", "numpy", "requests", "jieba"],
+      "properties": {
+        "python": {"const": "3.12.14"},
+        "numpy": {"const": "2.5.2"},
+        "requests": {"const": "2.34.2"},
+        "jieba": {"const": "0.42.1"}
+      }
+    },
+    "install_status": {"const": "installed"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "query_status": {"const": "completed"},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "receipt_type": {"const": "d3-candidate-acceptance"},
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github_repository", "github_run_attempt", "github_run_id", "github_sha", "github_workflow_ref"],
+      "properties": {
+        "github_repository": {"type": ["string", "null"]},
+        "github_run_attempt": {"type": ["string", "null"]},
+        "github_run_id": {"type": ["string", "null"]},
+        "github_sha": {"type": ["string", "null"]},
+        "github_workflow_ref": {"type": ["string", "null"]}
+      }
+    },
+    "runtime_id": {"const": "cpython-3.12.14+20260825"},
+    "schema_version": {"const": 1},
+    "status": {"const": "completed"},
+    "target": {"enum": ["windows-x64", "macos-x64", "macos-arm64"]},
+    "undo_status": {"const": "undone"},
+    "verify_status": {"const": "verified"}
+  }
+}

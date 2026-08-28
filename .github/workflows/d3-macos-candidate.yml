@@ -1,0 +1,138 @@
+name: D3 macOS 候选验收
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_ref:
+        description: 产品仓库精确 40 位提交
+        required: true
+        type: string
+      skill_ref:
+        description: Skill 仓库精确 40 位提交
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d3-macos-${{ github.sha }}-${{ inputs.product_ref }}-${{ inputs.skill_ref }}
+  cancel-in-progress: false
+
+jobs:
+  control:
+    name: 冻结三仓并构建候选
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出精确安装器提交
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: 校验并检出产品与 Skill 精确提交
+        shell: bash
+        env:
+          PRODUCT_REF: ${{ inputs.product_ref }}
+          SKILL_REF: ${{ inputs.skill_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$PRODUCT_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SKILL_REF" =~ ^[0-9a-f]{40}$ ]]
+          git clone --quiet https://github.com/montewaltrip188-hash/obsidian-llm-wiki-template.git repos/product
+          git -C repos/product checkout --quiet --detach "$PRODUCT_REF"
+          test "$(git -C repos/product rev-parse HEAD)" = "$PRODUCT_REF"
+          git clone --quiet https://github.com/montewaltrip188-hash/claudecode-wiki-skills.git repos/skill
+          git -C repos/skill checkout --quiet --detach "$SKILL_REF"
+          test "$(git -C repos/skill rev-parse HEAD)" = "$SKILL_REF"
+
+      - name: 生成可复现双平台 D2 计划
+        shell: bash
+        env:
+          PRODUCT_REF: ${{ inputs.product_ref }}
+          SKILL_REF: ${{ inputs.skill_ref }}
+        run: |
+          set -euo pipefail
+          python3 release/orchestrator.py plan \
+            --product-repo repos/product --product-ref "$PRODUCT_REF" \
+            --skill-repo repos/skill --skill-ref "$SKILL_REF" \
+            --installer-repo . --installer-ref "$GITHUB_SHA" \
+            --workspace d3-workspace
+          python3 release/orchestrator.py status --workspace d3-workspace
+
+      - name: 保存控制计划与 macOS 候选
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d3-control-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: |
+            d3-workspace/release-plan.json
+            d3-workspace/candidates/macos/first/candidate.zip
+
+  macos:
+    name: ${{ matrix.target }} 真机验收
+    needs: control
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: macos-x64
+          - runner: macos-15
+            target: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: 检出精确安装器提交
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: 下载控制计划与候选
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: d3-control-${{ github.run_id }}
+          path: control
+
+      - name: 执行架构绑定、Query、事务安装与回滚验收
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 release/d3_candidate.py preflight \
+            --release-plan control/release-plan.json \
+            --candidate control/candidates/macos/first/candidate.zip \
+            --target "${{ matrix.target }}"
+          python3 release/d3_candidate.py run \
+            --release-plan control/release-plan.json \
+            --candidate control/candidates/macos/first/candidate.zip \
+            --target "${{ matrix.target }}" \
+            --output "d3-${{ matrix.target }}-receipt.json"
+
+      - name: 为真机验收回执生成 GitHub 证明
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: d3-${{ matrix.target }}-receipt.json
+
+      - name: 固化离线 Sigstore bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.attest.outputs.bundle-path }}" \
+            "d3-${{ matrix.target }}-attestation.sigstore.json"
+
+      - name: 保存真机验收回执
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d3-${{ matrix.target }}-receipt-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            d3-${{ matrix.target }}-receipt.json
+            d3-${{ matrix.target }}-attestation.sigstore.json
