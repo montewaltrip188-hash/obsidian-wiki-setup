@@ -375,51 +375,49 @@ if [ -n "$CUSTOM_PATH" ]; then
 fi
 
 VAULT_ZIP="$SCRIPT_DIR/vault.zip"
-if [ ! -f "$VAULT_ZIP" ]; then
-    red "  未找到 vault.zip，请确认它和此脚本在同一目录"
+VAULT_MANIFEST="$SCRIPT_DIR/install-manifest.json"
+VAULT_DEPLOYER="$SCRIPT_DIR/extract-vault.py"
+for required_file in "$VAULT_ZIP" "$VAULT_MANIFEST" "$VAULT_DEPLOYER"; do
+    if [ ! -f "$required_file" ]; then
+        red "  缺少安全部署文件: $required_file"
+        exit 1
+    fi
+done
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+else
+    red "  安全部署需要 Python 3"
     exit 1
 fi
 
 SKIP_DEPLOY=false
-if [ -d "$DEFAULT_VAULT" ]; then
+ALLOW_EXISTING_VAULT=false
+if [ -e "$DEFAULT_VAULT" ] || [ -L "$DEFAULT_VAULT" ]; then
     yellow "  目录已存在: $DEFAULT_VAULT"
-    printf "  是否覆盖？(y/N): "
+    printf "  是否先保留同级备份再升级？(y/N): "
     read -r OVERWRITE
     if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
         yellow "  跳过部署"
         SKIP_DEPLOY=true
+    else
+        ALLOW_EXISTING_VAULT=true
     fi
 fi
 
 if [ "$SKIP_DEPLOY" = false ]; then
-    yellow "  正在解压知识库..."
-    if [ -d "$DEFAULT_VAULT" ]; then
-        rm -rf "$DEFAULT_VAULT"
+    yellow "  正在验证候选包并安全部署知识库..."
+    DEPLOY_ARGS=(
+        "$VAULT_DEPLOYER" deploy
+        --archive "$VAULT_ZIP"
+        --manifest "$VAULT_MANIFEST"
+        --target "$DEFAULT_VAULT"
+    )
+    if [ "$ALLOW_EXISTING_VAULT" = true ]; then
+        DEPLOY_ARGS+=(--allow-existing)
     fi
-    # 用 Python 解压以正确处理中文编码和反斜杠路径
-    python3 -c "
-import zipfile, os
-z = zipfile.ZipFile('$VAULT_ZIP')
-dest = '$DEFAULT_VAULT'
-for info in z.infolist():
-    try:
-        fn = info.filename.encode('cp437').decode('gbk')
-    except:
-        fn = info.filename
-    fn = fn.replace(chr(92), '/')
-    if fn.startswith('vault/'):
-        fn = fn[6:]
-    elif fn == 'vault':
-        continue
-    if not fn or fn.endswith('/'):
-        continue
-    path = os.path.join(dest, fn)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'wb') as f:
-        f.write(z.read(info))
-z.close()
-print('知识库已部署到:', dest)
-"
+    "$PYTHON_BIN" "${DEPLOY_ARGS[@]}"
     green "  知识库部署完成"
 fi
 

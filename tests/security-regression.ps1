@@ -185,8 +185,9 @@ Test-Case "仓库只交付公钥并阻断签发侧私密产物" {
     if (-not (Test-Path -LiteralPath $revokedIds -PathType Leaf)) { throw "缺少撤销 ID 清单" }
 
     $ignore = Get-Content -LiteralPath (Join-Path $repoRoot ".gitignore") -Raw
+    $ignoreLines = @($ignore -split '\r?\n')
     foreach ($pattern in @('activation-private-key*.xml', 'activation-private-key*.pem', 'activation-private-key*.pfx', 'activation-private-key*.key', 'issuer-private/', 'activation-codes.*', 'staging/', 'build/', 'dist/')) {
-        if ($ignore -notmatch "(?m)^$([regex]::Escape($pattern))$") {
+        if ($ignoreLines -notcontains $pattern) {
             throw ".gitignore 缺少 $pattern"
         }
     }

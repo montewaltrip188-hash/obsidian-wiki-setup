@@ -356,29 +356,44 @@ if (-not [string]::IsNullOrWhiteSpace($customPath)) {
 }
 
 $vaultZip = Join-Path $repoRoot "vault.zip"
-if (-not (Test-Path $vaultZip)) {
-    Write-Host "  [!] 未找到 vault.zip，请确认它和此脚本在同一目录" -ForegroundColor Red
+$vaultManifest = Join-Path $repoRoot "install-manifest.json"
+$vaultDeployer = Join-Path $repoRoot "extract-vault.py"
+foreach ($requiredFile in @($vaultZip, $vaultManifest, $vaultDeployer)) {
+    if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+        Write-Host "  [!] 缺少安全部署文件: $requiredFile" -ForegroundColor Red
+        exit 1
+    }
+}
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pythonCommand) {
+    Write-Host "  [!] 安全部署需要 Python 3" -ForegroundColor Red
     exit 1
 }
 
-if (Test-Path $defaultVaultPath) {
+if (Test-Path -LiteralPath $defaultVaultPath) {
     Write-Host "  [!] 目录已存在: $defaultVaultPath" -ForegroundColor Yellow
-    $overwrite = Read-Host "  是否覆盖？(y/N)"
+    $overwrite = Read-Host "  是否先保留同级备份再升级？(y/N)"
     if ($overwrite -ne 'y' -and $overwrite -ne 'Y') {
         Write-Host "  跳过部署" -ForegroundColor Yellow
         $skipDeploy = $true
+    } else {
+        $allowExistingVault = $true
     }
 }
 
 if (-not $skipDeploy) {
-    Write-Host "  正在解压知识库..." -ForegroundColor Yellow
-    Expand-Archive -Path $vaultZip -DestinationPath (Split-Path $defaultVaultPath -Parent) -Force
-    # Expand-Archive 会解压到 vault/ 子目录，重命名
-    $extractedPath = Join-Path (Split-Path $defaultVaultPath -Parent) "vault"
-    if ((Test-Path $extractedPath) -and ($extractedPath -ne $defaultVaultPath)) {
-        if (Test-Path $defaultVaultPath) { Remove-Item $defaultVaultPath -Recurse -Force }
-        Rename-Item $extractedPath $defaultVaultPath
+    Write-Host "  正在验证候选包并安全部署知识库..." -ForegroundColor Yellow
+    $deployArgs = @(
+        $vaultDeployer, "deploy",
+        "--archive", $vaultZip,
+        "--manifest", $vaultManifest,
+        "--target", $defaultVaultPath
+    )
+    if ($allowExistingVault) {
+        $deployArgs += "--allow-existing"
     }
+    & $pythonCommand.Source @deployArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "  知识库已部署到: $defaultVaultPath" -ForegroundColor Green
 }
 
