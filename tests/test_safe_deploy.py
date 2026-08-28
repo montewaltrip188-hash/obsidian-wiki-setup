@@ -504,6 +504,7 @@ class SafeDeployTests(unittest.TestCase):
             self.assertIn("--runtime-source", content, label)
             self.assertIn("verify_keyword_runtime.py", content, label)
             self.assertIn("--runtime-python", content, label)
+            self.assertIn("--runtime-root", content, label)
             self.assertIn("--query-script", content, label)
             self.assertNotIn("--include-ima", content, label)
 

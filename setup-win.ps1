@@ -456,7 +456,8 @@ Write-Step "安装 Wiki Skills..."
     $installedRuntimePython = Join-Path $installedVersionRoot ".runtime\python\python.exe"
     $installedQueryScript = Join-Path $installedVersionRoot "core\wiki-hybrid-search\scripts\wiki_search.py"
     $runtimeProbeOutput = & $pythonCommand $runtimeProbe `
-        --runtime-python $installedRuntimePython --query-script $installedQueryScript 2>&1
+        --runtime-python $installedRuntimePython --runtime-root (Join-Path $installedVersionRoot '.runtime') `
+        --query-script $installedQueryScript 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [!] 离线关键词 Query 运行时实测失败：$($runtimeProbeOutput -join ' ')" -ForegroundColor Red
         & $pythonCommand $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null

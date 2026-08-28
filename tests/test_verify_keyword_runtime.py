@@ -18,6 +18,9 @@ class VerifyKeywordRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="runtime-probe-") as temporary:
             root = Path(temporary)
             query_script = root / "query.py"
+            runtime_root = root / "runtime"
+            runtime_root.mkdir()
+            (runtime_root / "immutable.txt").write_text("immutable\n", encoding="utf-8")
             query_script.write_text(
                 """import json, os, sys
 from pathlib import Path
@@ -38,6 +41,8 @@ print('RECEIPT_JSON:' + json.dumps({
                     sys.executable,
                     "--query-script",
                     query_script,
+                    "--runtime-root",
+                    runtime_root,
                     "--expected-python",
                     f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
                     "--skip-locked-package-versions",
@@ -56,6 +61,7 @@ print('RECEIPT_JSON:' + json.dumps({
             self.assertEqual(
                 "wiki/concepts/offline-runtime-probe.md", receipt["result_path"]
             )
+            self.assertTrue(receipt["runtime_tree_unchanged"])
 
 
 if __name__ == "__main__":

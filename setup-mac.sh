@@ -470,6 +470,7 @@ step "安装 Wiki Skills..."
     INSTALLED_QUERY_SCRIPT="$INSTALLED_ROOT/core/wiki-hybrid-search/scripts/wiki_search.py"
     if ! RUNTIME_PROBE_OUTPUT=$("$PYTHON_BIN" "$RUNTIME_PROBE" \
         --runtime-python "$INSTALLED_RUNTIME_PYTHON" \
+        --runtime-root "$INSTALLED_ROOT/.runtime" \
         --query-script "$INSTALLED_QUERY_SCRIPT" 2>&1); then
         red "  离线关键词 Query 运行时实测失败: $RUNTIME_PROBE_OUTPUT"
         "$PYTHON_BIN" "$SKILL_MANAGER" undo --home "$HOME" --receipt "$SKILL_UNDO_RECEIPT" >/dev/null || true

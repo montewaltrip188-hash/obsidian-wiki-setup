@@ -39,13 +39,16 @@ def file_snapshot(root: Path) -> dict[str, dict[str, object]]:
 
 
 def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> str:
+    process_environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"}
+    if environment:
+        process_environment.update(environment)
     completed = subprocess.run(
         arguments,
         text=True,
         encoding="utf-8",
         errors="strict",
         capture_output=True,
-        env=environment,
+        env=process_environment,
         timeout=30,
         check=False,
     )
@@ -63,7 +66,7 @@ def dependency_versions(runtime_python: Path) -> dict[str, str]:
         "'requests':requests.__version__},sort_keys=True))"
     )
     try:
-        value = json.loads(run([str(runtime_python), "-c", code]).strip())
+        value = json.loads(run([str(runtime_python), "-B", "-c", code]).strip())
     except (json.JSONDecodeError, UnicodeError) as exc:
         raise ProbeError("DEPENDENCY_PROBE_INVALID") from exc
     if not isinstance(value, dict):
@@ -117,8 +120,12 @@ def parse_receipt(output: str) -> dict:
 def verify(args: argparse.Namespace) -> dict:
     runtime_python = args.runtime_python.expanduser().resolve(strict=True)
     query_script = args.query_script.expanduser().resolve(strict=True)
+    runtime_root = args.runtime_root.expanduser().resolve(strict=True)
     if not runtime_python.is_file() or not query_script.is_file():
         raise ProbeError("PROBE_INPUT_INVALID")
+    if not runtime_root.is_dir():
+        raise ProbeError("RUNTIME_ROOT_INVALID")
+    runtime_before = file_snapshot(runtime_root)
     versions = dependency_versions(runtime_python)
     if versions.get("python") != args.expected_python:
         raise ProbeError("PYTHON_VERSION_MISMATCH")
@@ -138,7 +145,7 @@ def verify(args: argparse.Namespace) -> dict:
             "PYTHONUTF8": "1",
         }
         output = run(
-            [str(runtime_python), str(query_script), "search", "离线"],
+            [str(runtime_python), "-B", str(query_script), "search", "离线"],
             environment=environment,
         )
         receipt = parse_receipt(output)
@@ -153,11 +160,14 @@ def verify(args: argparse.Namespace) -> dict:
             or receipt.get("answerability") != "candidate_supported"
         ):
             raise ProbeError("KEYWORD_QUERY_PROBE_FAILED")
+    if file_snapshot(runtime_root) != runtime_before:
+        raise ProbeError("KEYWORD_QUERY_MUTATED_RUNTIME_TREE")
     return {
         "dependencies": versions,
         "probe": "keyword_query",
         "result_path": EXPECTED_RESULT,
         "status": "completed",
+        "runtime_tree_unchanged": True,
         "synthetic_vault_unchanged": True,
     }
 
@@ -166,6 +176,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="验证受管离线关键词 Query 运行时")
     result.add_argument("--runtime-python", required=True, type=Path)
     result.add_argument("--query-script", required=True, type=Path)
+    result.add_argument("--runtime-root", required=True, type=Path)
     result.add_argument("--expected-python", default="3.12.14")
     result.add_argument("--skip-locked-package-versions", action="store_true")
     return result
