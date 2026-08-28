@@ -7,19 +7,151 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 CORE_SKILLS = ("design-juan-wiki", "wiki-hybrid-search", "ocr-and-documents")
 PACKAGE_NAME = "claudecode-wiki-skills"
 KEYWORD_RUNTIME_ERROR = "KEYWORD_RUNTIME_UNPROVISIONED"
+MUTATION_LOCK_ERROR = "INSTALL_TRANSACTION_LOCKED"
 
 
 class LifecycleError(Exception):
     """可预期且应 fail closed 的生命周期错误。"""
+
+
+class MutationLock:
+    """用内核文件锁串行化同一 HOME 的生命周期写操作。"""
+
+    def __init__(self, home, operation):
+        self.home = Path(os.path.realpath(home.absolute()))
+        self.operation = operation
+        self.path = self.home / ".agents" / "locks" / f"{PACKAGE_NAME}.lock"
+        self.owner_id = uuid.uuid4().hex
+        self.stream = None
+
+    @staticmethod
+    def _lock_stream(stream):
+        stream.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    @staticmethod
+    def _unlock_stream(stream):
+        stream.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+    def _read_metadata(self):
+        self.stream.seek(1)
+        raw = self.stream.read().decode("utf-8", errors="strict").strip("\x00\r\n ")
+        if not raw:
+            return None
+        try:
+            metadata = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise LifecycleError("INSTALL_TRANSACTION_LOCK_METADATA_INVALID") from error
+        if not isinstance(metadata, dict):
+            raise LifecycleError("INSTALL_TRANSACTION_LOCK_METADATA_INVALID")
+        return metadata
+
+    def _write_metadata(self, metadata):
+        payload = (json.dumps(metadata, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        # 第 1 字节是 Windows msvcrt.locking 的永久哨兵，不能截断。
+        self.stream.seek(1)
+        self.stream.truncate()
+        self.stream.write(payload)
+        self.stream.flush()
+        os.fsync(self.stream.fileno())
+        self.stream.seek(0)
+
+    @staticmethod
+    def _previous_owner_summary(metadata):
+        if not metadata:
+            return None
+        return {
+            "owner_id": metadata.get("owner_id"),
+            "pid": metadata.get("pid"),
+            "created_at": metadata.get("created_at"),
+            "released_at": metadata.get("released_at"),
+        }
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.stream = self.path.open("a+b")
+        self.stream.seek(0, os.SEEK_END)
+        if self.stream.tell() == 0:
+            self.stream.write(b"\x00")
+            self.stream.flush()
+        try:
+            self._lock_stream(self.stream)
+        except OSError as error:
+            self.stream.close()
+            self.stream = None
+            raise LifecycleError(MUTATION_LOCK_ERROR) from error
+
+        try:
+            # 旧元数据只用于审计。能取得内核锁即证明旧进程已释放或崩溃，
+            # 因而无需按时间猜测并破坏可能仍然存活的锁。
+            previous = self._read_metadata()
+            now = time.time()
+            metadata = {
+                "schema_version": 1,
+                "package": PACKAGE_NAME,
+                "owner_id": self.owner_id,
+                "pid": os.getpid(),
+                "hostname": socket.gethostname(),
+                "operation": self.operation,
+                "home": str(self.home),
+                "created_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+                "created_unix": now,
+                "previous_owner": self._previous_owner_summary(previous),
+            }
+            self._write_metadata(metadata)
+            return self
+        except Exception:
+            self._unlock_stream(self.stream)
+            self.stream.close()
+            self.stream = None
+            raise
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        release_error = None
+        try:
+            metadata = self._read_metadata()
+            if not metadata or metadata.get("owner_id") != self.owner_id:
+                release_error = LifecycleError("INSTALL_TRANSACTION_LOCK_OWNERSHIP_LOST")
+            else:
+                metadata["released_at"] = datetime.now(timezone.utc).isoformat()
+                metadata["released_unix"] = time.time()
+                self._write_metadata(metadata)
+        except Exception as error:
+            release_error = error
+        finally:
+            self._unlock_stream(self.stream)
+            self.stream.close()
+            self.stream = None
+        if release_error is not None and exc_type is None:
+            raise release_error
+        return False
 
 
 def capability_receipt(skill_installed):
@@ -54,7 +186,7 @@ def make_parser():
     return parser
 
 
-def build_plan(args):
+def inspect_source(args):
     source = args.source.absolute()
     version_file = source / "VERSION"
     if not version_file.is_file():
@@ -71,6 +203,11 @@ def build_plan(args):
             raise LifecycleError(f"源包缺少 Skill 入口：{name}")
     if not (source / "core" / "wiki-hybrid-search" / "scripts" / "wiki_search.py").is_file():
         raise LifecycleError("源包缺少关键词 Query 入口脚本")
+    return source, version, skills
+
+
+def build_plan(args):
+    source, version, skills = inspect_source(args)
     owned_roots, runtime_aliases = detect_runtime_layout(args.home.absolute())
     plan = {
         "status": "ready",
@@ -272,12 +409,20 @@ def remove_owned_entry(path, mode):
 
 
 def install(args):
+    source, version, _ = inspect_source(args)
+    home = args.home.absolute()
+    package = home / ".agents" / "packages" / PACKAGE_NAME
+    ensure_windows_path_budget(source, package / "versions", version)
+    with MutationLock(home, "install"):
+        return install_locked(args)
+
+
+def install_locked(args):
     plan = build_plan(args)
     home = args.home.absolute()
     owned_roots = {owner: Path(path) for owner, path in plan["owned_roots"].items()}
     package = home / ".agents" / "packages" / PACKAGE_NAME
     version_root = package / "versions" / plan["version"]
-    ensure_windows_path_budget(args.source.absolute(), package / "versions", plan["version"])
     state_path = package / "state.json"
     previous_state = None
     if state_path.exists():
@@ -313,6 +458,7 @@ def install(args):
     staging = package / "versions" / (".staging-" + uuid.uuid4().hex)
     created_entries = []
     removed_previous = []
+    published_version = False
     try:
         staging.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(args.source.absolute(), staging, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
@@ -332,6 +478,7 @@ def install(args):
         }
         atomic_json(staging / ".wiki-skill-install.json", manifest)
         staging.replace(version_root)
+        published_version = True
 
         if previous_state:
             for owner, configured in previous_state["entries"].items():
@@ -392,7 +539,7 @@ def install(args):
                 recreate_owned_entry(Path(ownership["target"]), destination, ownership["mode"])
         if staging.exists():
             shutil.rmtree(staging)
-        if version_root.exists():
+        if published_version and version_root.exists():
             shutil.rmtree(version_root)
         raise
     return {
@@ -479,6 +626,11 @@ def verify(args):
 
 
 def rollback(args):
+    with MutationLock(args.home.absolute(), "rollback"):
+        return rollback_locked(args)
+
+
+def rollback_locked(args):
     home = args.home.absolute()
     verify(argparse.Namespace(home=home))
     package, state_path, state = load_state(home)
@@ -538,6 +690,11 @@ def rollback(args):
 
 
 def uninstall(args):
+    with MutationLock(args.home.absolute(), "uninstall"):
+        return uninstall_locked(args)
+
+
+def uninstall_locked(args):
     home = args.home.absolute()
     verify(argparse.Namespace(home=home))
     package, _, state = load_state(home)

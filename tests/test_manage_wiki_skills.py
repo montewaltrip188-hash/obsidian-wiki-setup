@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -58,6 +59,52 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual(expected, result.returncode, result.stderr or result.stdout)
         stream = result.stdout if expected == 0 else result.stderr
         return json.loads(stream)
+
+    def run_concurrent_installs(self):
+        barrier = self.root / "start-concurrent-install"
+        wrapper = (
+            "import subprocess,sys,time; from pathlib import Path; "
+            "ready=Path(sys.argv[1]); barrier=Path(sys.argv[2]); "
+            "ready.write_text('ready', encoding='utf-8'); "
+            "\nwhile not barrier.exists(): time.sleep(0.005)\n"
+            "completed=subprocess.run([sys.executable, *sys.argv[3:]]); "
+            "raise SystemExit(completed.returncode)"
+        )
+        processes = []
+        ready_paths = []
+        for index in range(2):
+            ready = self.root / f"concurrent-install-{index}.ready"
+            ready_paths.append(ready)
+            processes.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        wrapper,
+                        str(ready),
+                        str(barrier),
+                        str(CLI),
+                        "install",
+                        "--source",
+                        str(self.source),
+                        "--home",
+                        str(self.home),
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    encoding="utf-8",
+                    env={**os.environ, "PYTHONUTF8": "1"},
+                )
+            )
+        deadline = time.monotonic() + 10
+        while not all(path.exists() for path in ready_paths):
+            if time.monotonic() >= deadline:
+                self.fail("并发安装子进程未在时限内就绪")
+            time.sleep(0.01)
+        barrier.write_text("go\n", encoding="utf-8")
+        return [process.communicate(timeout=60) + (process.returncode,) for process in processes]
 
     def alias_claude_root_to_codex_root(self):
         codex_root = self.home / ".agents" / "skills"
@@ -199,6 +246,16 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual(
             ["install", "upgrade", "already_installed"], contract["plan"]["actions"]
         )
+        self.assertEqual(
+            ["install", "rollback", "uninstall"],
+            contract["transaction_lock"]["commands"],
+        )
+        self.assertEqual("kernel_file_lock", contract["transaction_lock"]["lease"])
+        self.assertEqual("automatic_on_process_exit", contract["transaction_lock"]["stale_recovery"])
+        self.assertEqual(
+            ["plan", "verify"], contract["transaction_lock"]["read_only_commands"]
+        )
+        self.assertIn("concurrent_mutation", contract["fail_closed_on"])
 
     def test_unsafe_version_cannot_escape_version_directory(self):
         (self.source / "VERSION").write_text("..\n", encoding="utf-8")
@@ -245,6 +302,61 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual("KEYWORD_RUNTIME_UNPROVISIONED", receipt["keyword_runtime_error"])
         self.assertGreater(len(manifest["files"]), 6)
         self.assertEqual("installed", receipt["status"])
+
+    def test_concurrent_install_on_same_home_allows_one_transaction_and_preserves_winner(self):
+        for index in range(1000):
+            fixture = self.source / "references" / "concurrency" / f"fixture-{index:04d}.txt"
+            fixture.parent.mkdir(parents=True, exist_ok=True)
+            fixture.write_text(("concurrent-install\n" * 32), encoding="utf-8")
+
+        results = self.run_concurrent_installs()
+
+        self.assertEqual([0, 2], sorted(result[2] for result in results), results)
+        blocked = next(result for result in results if result[2] == 2)
+        blocked_receipt = json.loads(blocked[1])
+        self.assertEqual("blocked", blocked_receipt["status"])
+        self.assertEqual("INSTALL_TRANSACTION_LOCKED", blocked_receipt["error"])
+        self.assertEqual("verified", self.run_cli("verify", "--home", self.home)["status"])
+
+    def test_install_recovers_stale_unlocked_metadata_without_preserving_owner_chain(self):
+        lock_path = (
+            self.home
+            / ".agents"
+            / "locks"
+            / "claudecode-wiki-skills.lock"
+        )
+        lock_path.parent.mkdir(parents=True)
+        stale = {
+            "schema_version": 1,
+            "package": "claudecode-wiki-skills",
+            "owner_id": "stale-owner",
+            "pid": 99999999,
+            "hostname": "stale-host",
+            "operation": "install",
+            "home": str(self.home),
+            "created_at": "2000-01-01T00:00:00+00:00",
+            "created_unix": 946684800,
+            "previous_owner": {"owner_id": "must-not-grow-recursively"},
+        }
+        lock_path.write_bytes(
+            b"\x00" + (json.dumps(stale, ensure_ascii=False) + "\n").encode("utf-8")
+        )
+
+        receipt = self.run_cli("install", "--source", self.source, "--home", self.home)
+
+        metadata = json.loads(lock_path.read_bytes()[1:].decode("utf-8"))
+        self.assertEqual("installed", receipt["status"])
+        self.assertEqual(
+            {
+                "owner_id": "stale-owner",
+                "pid": 99999999,
+                "created_at": "2000-01-01T00:00:00+00:00",
+                "released_at": None,
+            },
+            metadata["previous_owner"],
+        )
+        self.assertIn("released_at", metadata)
+        self.assertEqual("verified", self.run_cli("verify", "--home", self.home)["status"])
 
     def test_install_preserves_unrelated_entries_but_blocks_unknown_name_collision(self):
         root = self.home / ".agents" / "skills"
