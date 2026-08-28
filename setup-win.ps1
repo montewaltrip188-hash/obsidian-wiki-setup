@@ -404,6 +404,7 @@ $skillPlan = ($skillPlanOutput -join [Environment]::NewLine) | ConvertFrom-Json
 Write-Host "  Wiki Skill 预检完成：$($skillPlan.action)" -ForegroundColor Green
 
 $allowExistingVault = $false
+$deployReceipt = $null
 if (Test-Path -LiteralPath $defaultVaultPath) {
     Write-Host "  [!] 目录已存在: $defaultVaultPath" -ForegroundColor Yellow
     $overwrite = Read-Host "  是否先保留同级备份再升级？(y/N)"
@@ -457,9 +458,10 @@ Write-Step "安装 Wiki Skills..."
     if ($allowExistingVault) {
         $deployArgs += "--allow-existing"
     }
-    & $pythonCommand.Source @deployArgs
+    $deployOutput = & $pythonCommand.Source @deployArgs 2>&1
     $deployExit = $LASTEXITCODE
     if ($deployExit -ne 0) {
+        Write-Host "  [!] Vault 部署失败：$($deployOutput -join ' ')" -ForegroundColor Red
         $restoreCommand = switch ($skillPlan.action) {
             "install" { "uninstall" }
             "upgrade" { "rollback" }
@@ -473,10 +475,20 @@ Write-Step "安装 Wiki Skills..."
         }
         exit $deployExit
     }
+    try {
+        $deployResult = ($deployOutput -join [Environment]::NewLine) | ConvertFrom-Json
+        $deployReceipt = [string]$deployResult.receipt
+        if ([string]::IsNullOrWhiteSpace($deployReceipt)) {
+            throw "部署输出缺少 receipt"
+        }
+    } catch {
+        Write-Host "  [!] 无法绑定部署回执；已保留升级备份：$($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
     Write-Host "  知识库已部署到: $defaultVaultPath" -ForegroundColor Green
 
 # ----------------------------------------------------------
-# 5. 配置 Claudian 插件的 Claude CLI 路径
+# 5. 配置 Claudian 插件的 Claude CLI 路径（部署后受控运行时变更）
 # ----------------------------------------------------------
 Write-Step "配置 Claudian 插件..."
 $claudeExe = (Get-Command claude -ErrorAction SilentlyContinue).Source
@@ -485,6 +497,14 @@ if ($claudeExe) {
     $claudianDataPath = Join-Path $defaultVaultPath ".obsidian\plugins\claudian\data.json"
     if (Test-Path (Split-Path $claudianDataPath -Parent)) {
         $claudianData | Out-File -FilePath $claudianDataPath -Encoding utf8 -Force
+        if ($deployReceipt) {
+            $finalizeOutput = & $pythonCommand.Source $vaultDeployer finalize-runtime-config `
+                --target $defaultVaultPath --deploy-receipt $deployReceipt 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  [!] Claudian 运行时配置验收失败；已保留升级备份：$($finalizeOutput -join ' ')" -ForegroundColor Red
+                exit 1
+            }
+        }
         Write-Host "  Claudian 已配置 CLI 路径: $claudeExe" -ForegroundColor Green
     }
 }

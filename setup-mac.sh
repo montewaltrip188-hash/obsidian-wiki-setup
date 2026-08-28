@@ -409,6 +409,7 @@ SKILL_ACTION=$(printf '%s' "$SKILL_PLAN" | "$PYTHON_BIN" -c \
 green "  Wiki Skill 预检完成: $SKILL_ACTION"
 
 ALLOW_EXISTING_VAULT=false
+DEPLOY_RECEIPT=""
 if [ -e "$DEFAULT_VAULT" ] || [ -L "$DEFAULT_VAULT" ]; then
     yellow "  目录已存在: $DEFAULT_VAULT"
     printf "  是否先保留同级备份再升级？(y/N): "
@@ -460,10 +461,20 @@ step "安装 Wiki Skills..."
     if [ "$ALLOW_EXISTING_VAULT" = true ]; then
         DEPLOY_ARGS+=(--allow-existing)
     fi
-    if "$PYTHON_BIN" "${DEPLOY_ARGS[@]}"; then
+    if DEPLOY_OUTPUT=$("$PYTHON_BIN" "${DEPLOY_ARGS[@]}" 2>&1); then
+        if ! DEPLOY_RECEIPT=$(printf '%s' "$DEPLOY_OUTPUT" | "$PYTHON_BIN" -c \
+            'import json,sys; print(json.load(sys.stdin)["receipt"])'); then
+            red "  无法绑定部署回执；已保留升级备份"
+            exit 1
+        fi
+        if [ -z "$DEPLOY_RECEIPT" ]; then
+            red "  部署输出缺少 receipt；已保留升级备份"
+            exit 1
+        fi
         green "  知识库部署完成"
     else
         DEPLOY_EXIT=$?
+        red "  Vault 部署失败: $DEPLOY_OUTPUT"
         RESTORE_COMMAND=""
         case "$SKILL_ACTION" in
             install) RESTORE_COMMAND="uninstall" ;;
@@ -478,7 +489,7 @@ step "安装 Wiki Skills..."
     fi
 
 # ----------------------------------------------------------
-# 5. 配置 Claudian 插件
+# 5. 配置 Claudian 插件（部署后受控运行时变更）
 # ----------------------------------------------------------
 step "配置 Claudian 插件..."
 CLAUDE_EXE=$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")
@@ -486,6 +497,13 @@ if [ -x "$CLAUDE_EXE" ]; then
     CLAUDIAN_DIR="$DEFAULT_VAULT/.obsidian/plugins/claudian"
     if [ -d "$CLAUDIAN_DIR" ]; then
         echo "{\"claudePath\": \"$CLAUDE_EXE\"}" > "$CLAUDIAN_DIR/data.json"
+        if [ -n "$DEPLOY_RECEIPT" ]; then
+            if ! FINALIZE_OUTPUT=$("$PYTHON_BIN" "$VAULT_DEPLOYER" finalize-runtime-config \
+                --target "$DEFAULT_VAULT" --deploy-receipt "$DEPLOY_RECEIPT" 2>&1); then
+                red "  Claudian 运行时配置验收失败；已保留升级备份: $FINALIZE_OUTPUT"
+                exit 1
+            fi
+        fi
         green "  Claudian 已配置 CLI 路径: $CLAUDE_EXE"
     fi
 fi

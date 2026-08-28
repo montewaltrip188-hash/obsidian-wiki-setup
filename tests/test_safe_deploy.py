@@ -476,11 +476,20 @@ class SafeDeployTests(unittest.TestCase):
             self.assertIn("deploy-manifest.json", content, label)
             self.assertNotIn("install-manifest.json", content, label)
             self.assertRegex(content, r"\bdeploy\b", label)
+            self.assertIn("finalize-runtime-config", content, label)
             self.assertIn("--allow-existing", content, label)
         self.assertNotIn("Expand-Archive", windows)
         self.assertNotIn("Remove-Item $defaultVaultPath -Recurse", windows)
         self.assertNotIn("rm -rf \"$DEFAULT_VAULT\"", mac)
         self.assertNotIn("zipfile.ZipFile", mac)
+        self.assertLess(
+            windows.index("$claudianData | Out-File"),
+            windows.index("finalize-runtime-config"),
+        )
+        self.assertLess(
+            mac.index('> "$CLAUDIAN_DIR/data.json"'),
+            mac.index("finalize-runtime-config"),
+        )
 
     def test_platform_setup_scripts_install_and_verify_three_core_skills(self) -> None:
         windows = (REPO_ROOT / "setup-win.ps1").read_text(encoding="utf-8")
