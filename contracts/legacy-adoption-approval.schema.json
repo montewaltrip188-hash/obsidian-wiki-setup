@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/legacy-adoption-approval.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["approval_format", "approved_at", "baseline_id", "baseline_sha256", "plan_id", "subject"],
+  "properties": {
+    "approval_format": {"const": 1},
+    "approved_at": {"type": "string", "minLength": 1},
+    "baseline_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$"},
+    "baseline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subject": {"type": "string", "minLength": 1}
+  }
+}

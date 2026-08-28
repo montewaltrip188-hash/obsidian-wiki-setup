@@ -104,6 +104,10 @@ U3 用 `scripts/joint-update.ps1`（Windows）或 `scripts/joint-update.sh`（ma
 
 `apply` 只接受与联合计划完全一致的审批，并分别要求 `approve_skill_change` 与 `allow_index_rebuild`。执行顺序固定为：安装目标 Skill 并取得 `undo_receipt`，应用 Vault diff，检查四类索引派生签名，必要且获批时重建索引，最后运行严格 Query 并读取命中页全文核对摘要。失败时先回滚 Vault，再恢复写前索引，最后按回执撤销 Skill，并留下带 seal 的恢复回执；显式 `rollback` 也会先只读预检三个组件的当前状态和备份完整性，拒绝覆盖事务后的客户变化。完整合同见 `contracts/joint-vault-skill-transaction-v1.md`。
 
+## U4：旧客户纳管
+
+缺少产品状态的旧 Vault 始终返回 `legacy_adoption_required`。维护者用已知历史产品树 catalog 运行严格只读 `legacy-plan`：它只比较路径政策声明的产品受管路径，不扫描客户内容目录；只有恰好一个历史 Base 完全匹配时才给出推荐。随后仍须提供绑定 `plan_id`、Base ID 和 Base SHA-256 的人工审批，`legacy-adopt` 才会在原 Vault 写入产品状态，并把官方 Base 与回执写到 Vault 外部缓存。多个精确候选、本地修改或缺失项都会明示为不确定项，不会自动猜测。完整合同见 `contracts/legacy-adoption-v1.md`。
+
 ## Skill 安装位置
 
 Wiki Skill 使用用户级版本化安装：

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/legacy-adoption-plan.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidates", "catalog_sha256", "command", "path_policy_sha256", "plan_id", "recommended_baseline_id", "status", "timing_ms", "vault"],
+  "properties": {
+    "candidates": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "catalog_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "command": {"const": "legacy-plan"},
+    "path_policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "recommended_baseline_id": {"type": ["string", "null"]},
+    "status": {"const": "adoption_approval_required"},
+    "timing_ms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalog", "managed_scan", "compare", "total"],
+      "properties": {
+        "catalog": {"type": "number", "minimum": 0},
+        "managed_scan": {"type": "number", "minimum": 0},
+        "compare": {"type": "number", "minimum": 0},
+        "total": {"type": "number", "minimum": 0}
+      }
+    },
+    "vault": {"type": "string", "minLength": 1}
+  }
+}

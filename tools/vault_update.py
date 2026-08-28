@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import sys
+import time
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -428,6 +429,323 @@ def managed_inventory_digest(files: list[tuple[str, bytes]]) -> str:
         for relative, content in sorted(files, key=lambda item: item[0].encode("utf-8"))
     ]
     return sha256_bytes(canonical_json(records))
+
+
+def validate_legacy_bundle(bundle: dict) -> None:
+    """验证人工提供的已知历史组合；不把客户现状反推为官方 Base。"""
+    try:
+        product = bundle["components"]["product"]
+        skills = bundle["components"]["wiki_skills"]
+    except (KeyError, TypeError) as exc:
+        raise UpdateError("LEGACY_BUNDLE_INVALID") from exc
+    if (
+        bundle.get("manifest_format") != 1
+        or bundle.get("release_state") != "stable"
+        or not isinstance(bundle.get("bundle_version"), str)
+        or not HEX64.fullmatch(str(bundle.get("candidate_id", "")))
+        or not isinstance(product.get("repository"), str)
+        or not product["repository"]
+        or not HEX40.fullmatch(str(product.get("commit", "")))
+        or not HEX40.fullmatch(str(product.get("tree", "")))
+        or not isinstance(skills.get("version"), str)
+        or not HEX40.fullmatch(str(skills.get("commit", "")))
+    ):
+        raise UpdateError("LEGACY_BUNDLE_INVALID")
+    semver(bundle["bundle_version"])
+    semver(skills["version"])
+
+
+def load_legacy_catalog(path: Path) -> tuple[dict, list[dict]]:
+    catalog_path = path.expanduser().resolve(strict=True)
+    catalog = load_json(catalog_path, "LEGACY_CATALOG_INVALID")
+    if set(catalog) != {"catalog_format", "baselines"} or catalog.get("catalog_format") != 1:
+        raise UpdateError("LEGACY_CATALOG_INVALID")
+    baselines = catalog.get("baselines")
+    if not isinstance(baselines, list) or not baselines:
+        raise UpdateError("LEGACY_CATALOG_INVALID")
+    resolved = []
+    identifiers: set[str] = set()
+    for item in baselines:
+        if not isinstance(item, dict) or set(item) != {
+            "id",
+            "product_root",
+            "bundle_manifest",
+        }:
+            raise UpdateError("LEGACY_CATALOG_INVALID")
+        identifier = item.get("id")
+        if (
+            not isinstance(identifier, str)
+            or not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", identifier)
+            or identifier in identifiers
+        ):
+            raise UpdateError("LEGACY_CATALOG_INVALID")
+        identifiers.add(identifier)
+        try:
+            product_root = Path(item["product_root"]).expanduser().resolve(strict=True)
+            manifest_path = Path(item["bundle_manifest"]).expanduser().resolve(strict=True)
+        except (OSError, TypeError) as exc:
+            raise UpdateError("LEGACY_CATALOG_INVALID") from exc
+        if not product_root.is_dir() or not manifest_path.is_file():
+            raise UpdateError("LEGACY_CATALOG_INVALID")
+        bundle = load_json(manifest_path, "LEGACY_BUNDLE_INVALID")
+        validate_legacy_bundle(bundle)
+        resolved.append(
+            {
+                "id": identifier,
+                "product_root": product_root,
+                "manifest_path": manifest_path,
+                "bundle": bundle,
+            }
+        )
+    return catalog, resolved
+
+
+def static_glob_root(pattern: str) -> str:
+    wildcard = min(
+        (position for token in "*?[" if (position := pattern.find(token)) >= 0),
+        default=len(pattern),
+    )
+    prefix = pattern[:wildcard]
+    if "/" not in prefix:
+        return ""
+    return prefix.rsplit("/", 1)[0] + "/"
+
+
+def scan_managed_local_paths(vault: Path, policy: dict) -> set[str]:
+    """只枚举产品受管子树，绝不递归客户内容根。"""
+    result: set[str] = set()
+    scan_roots: set[str] = set()
+    for rule in policy["rules"]:
+        if rule.get("ownership") not in {"product_merge", "product_replace"}:
+            continue
+        for relative in rule.get("paths", []):
+            result.add(safe_relative(relative).as_posix())
+        for prefix in rule.get("prefixes", []):
+            normalized = safe_relative(prefix.rstrip("/")).as_posix() + "/"
+            scan_roots.add(normalized)
+        for pattern in rule.get("globs", []):
+            root = static_glob_root(pattern)
+            if not root:
+                raise UpdateError("PATH_POLICY_UNBOUNDED_MANAGED_GLOB")
+            scan_roots.add(safe_relative(root.rstrip("/")).as_posix() + "/")
+    for relative_root in sorted(scan_roots):
+        absolute_root = guarded_path(vault, Path(relative_root.rstrip("/")))
+        if not absolute_root.exists():
+            continue
+        if absolute_root.is_symlink() or not absolute_root.is_dir():
+            raise UpdateError("MANAGED_PATH_NOT_DIRECTORY")
+        for candidate in absolute_root.rglob("*"):
+            if candidate.is_symlink():
+                raise UpdateError("MANAGED_PATH_LINK_UNSUPPORTED")
+            if candidate.is_file():
+                relative = candidate.relative_to(vault).as_posix()
+                if path_rule(relative, policy).get("ownership") in {
+                    "product_merge",
+                    "product_replace",
+                }:
+                    result.add(relative)
+    return result
+
+
+def legacy_plan(args: argparse.Namespace) -> dict:
+    started = time.perf_counter()
+    vault = args.vault.expanduser().resolve(strict=True)
+    if not vault.is_dir():
+        raise UpdateError("VAULT_NOT_DIRECTORY")
+    if load_state(vault) is not None:
+        raise UpdateError("PRODUCT_STATE_ALREADY_EXISTS")
+    policy = load_policy(args.path_policy)
+    catalog, baselines = load_legacy_catalog(args.catalog)
+    catalog_done = time.perf_counter()
+    local_paths = scan_managed_local_paths(vault, policy)
+    managed_scan_done = time.perf_counter()
+    candidates = []
+    for baseline in baselines:
+        files = managed_product_files(baseline["product_root"], policy)
+        if not files:
+            raise UpdateError("MANAGED_BASELINE_EMPTY")
+        file_map = dict(files)
+        paths = sorted(set(file_map) | local_paths, key=lambda item: item.encode("utf-8"))
+        uncertainties = []
+        matched = 0
+        for relative in paths:
+            base = file_map.get(relative)
+            local = optional_bytes(vault, relative)
+            if base == local:
+                matched += 1
+                continue
+            if base is None:
+                reason = "local_only_managed_path"
+            elif local is None:
+                reason = "missing_local_path"
+            else:
+                reason = "local_modified"
+            uncertainties.append(
+                {
+                    "base_sha256": sha256_bytes(base) if base is not None else None,
+                    "local_sha256": sha256_bytes(local) if local is not None else None,
+                    "path": relative,
+                    "reason": reason,
+                }
+            )
+        baseline_bytes = deterministic_baseline_zip(files)
+        bundle = baseline["bundle"]
+        product = bundle["components"]["product"]
+        skills = bundle["components"]["wiki_skills"]
+        candidates.append(
+            {
+                "baseline_id": baseline["id"],
+                "baseline_sha256": sha256_bytes(baseline_bytes),
+                "bundle_candidate_id": bundle["candidate_id"],
+                "bundle_version": bundle["bundle_version"],
+                "exact_match": not uncertainties,
+                "managed_inventory_sha256": managed_inventory_digest(files),
+                "matched_paths": matched,
+                "product_commit": product["commit"],
+                "product_tree": product["tree"],
+                "scanned_paths": len(paths),
+                "skill_commit": skills["commit"],
+                "skill_version": skills["version"],
+                "uncertainties": uncertainties,
+            }
+        )
+    exact = [item["baseline_id"] for item in candidates if item["exact_match"]]
+    payload = {
+        "candidates": candidates,
+        "catalog_sha256": sha256_bytes(canonical_json(catalog)),
+        "command": "legacy-plan",
+        "path_policy_sha256": sha256_bytes(args.path_policy.read_bytes()),
+        "recommended_baseline_id": exact[0] if len(exact) == 1 else None,
+        "status": "adoption_approval_required",
+        "vault": str(vault),
+    }
+    payload["plan_id"] = sha256_bytes(canonical_json(payload))
+    completed = time.perf_counter()
+    payload["timing_ms"] = {
+        "catalog": round((catalog_done - started) * 1000, 3),
+        "managed_scan": round((managed_scan_done - catalog_done) * 1000, 3),
+        "compare": round((completed - managed_scan_done) * 1000, 3),
+        "total": round((completed - started) * 1000, 3),
+    }
+    return payload
+
+
+def validate_legacy_approval(plan_payload: dict, approval: dict) -> dict:
+    expected = {
+        "approval_format",
+        "approved_at",
+        "baseline_id",
+        "baseline_sha256",
+        "plan_id",
+        "subject",
+    }
+    if (
+        set(approval) != expected
+        or approval.get("approval_format") != 1
+        or approval.get("plan_id") != plan_payload.get("plan_id")
+        or not isinstance(approval.get("approved_at"), str)
+        or not approval["approved_at"]
+        or not isinstance(approval.get("subject"), str)
+        or not approval["subject"]
+    ):
+        raise UpdateError("LEGACY_APPROVAL_MISMATCH")
+    selected = next(
+        (
+            item
+            for item in plan_payload.get("candidates", [])
+            if item.get("baseline_id") == approval.get("baseline_id")
+        ),
+        None,
+    )
+    if selected is None or selected.get("baseline_sha256") != approval.get("baseline_sha256"):
+        raise UpdateError("LEGACY_APPROVAL_MISMATCH")
+    return selected
+
+
+def legacy_adopt(args: argparse.Namespace) -> dict:
+    supplied_plan = load_json(args.plan, "LEGACY_PLAN_INVALID")
+    current_plan = legacy_plan(args)
+    supplied_stable = {key: value for key, value in supplied_plan.items() if key != "timing_ms"}
+    current_stable = {key: value for key, value in current_plan.items() if key != "timing_ms"}
+    if supplied_stable != current_stable:
+        raise UpdateError("LEGACY_PLAN_STALE")
+    approval = load_json(args.approval, "LEGACY_APPROVAL_INVALID")
+    selected = validate_legacy_approval(current_plan, approval)
+    vault = args.vault.expanduser().resolve(strict=True)
+    if (vault / STATE_RELATIVE).exists():
+        raise UpdateError("PRODUCT_STATE_ALREADY_EXISTS")
+    _catalog, baselines = load_legacy_catalog(args.catalog)
+    source = next(item for item in baselines if item["id"] == selected["baseline_id"])
+    policy = load_policy(args.path_policy)
+    files = managed_product_files(source["product_root"], policy)
+    baseline_bytes = deterministic_baseline_zip(files)
+    if sha256_bytes(baseline_bytes) != selected["baseline_sha256"]:
+        raise UpdateError("LEGACY_PLAN_STALE")
+    cache = ensure_external_cache(vault, args.cache_root)
+    bundle = source["bundle"]
+    product = bundle["components"]["product"]
+    skills = bundle["components"]["wiki_skills"]
+    baseline_path = guarded_path(cache, Path("baselines") / f"{product['tree']}.zip")
+    if baseline_path.exists():
+        if baseline_path.read_bytes() != baseline_bytes:
+            raise UpdateError("BASELINE_CACHE_COLLISION")
+    else:
+        atomic_write(baseline_path, baseline_bytes)
+    transaction_id = uuid.uuid4().hex
+    vault_id = uuid.uuid4().hex
+    state = {
+        "applied_migrations": [],
+        "bundle": {
+            "candidate_id": bundle["candidate_id"],
+            "version": bundle["bundle_version"],
+        },
+        "last_transaction": transaction_id,
+        "managed_inventory_sha256": selected["managed_inventory_sha256"],
+        "product": {
+            "base_commit": product["commit"],
+            "base_tree": product["tree"],
+            "baseline_sha256": selected["baseline_sha256"],
+            "repository": product["repository"],
+        },
+        "schema_version": 1,
+        "skills": {"commit": skills["commit"], "version": skills["version"]},
+        "vault_id": vault_id,
+    }
+    receipt = seal_receipt(
+        {
+            "baseline_id": selected["baseline_id"],
+            "baseline_sha256": selected["baseline_sha256"],
+            "operation": "legacy_adopt",
+            "plan_id": current_plan["plan_id"],
+            "receipt_format": 1,
+            "state_after_sha256": sha256_bytes(canonical_json(state)),
+            "status": "completed",
+            "transaction_id": transaction_id,
+            "vault_id": vault_id,
+        }
+    )
+    receipt_path = guarded_path(
+        cache, Path("legacy-adoptions") / vault_cache_key(vault_id) / f"{transaction_id}.json"
+    )
+    atomic_write(receipt_path, pretty_json_bytes(receipt))
+    state_path = guarded_path(vault, STATE_RELATIVE)
+    try:
+        atomic_write(state_path, pretty_json_bytes(state))
+    except Exception:
+        try:
+            receipt_path.unlink()
+        except OSError:
+            pass
+        raise
+    return {
+        "baseline_id": selected["baseline_id"],
+        "baseline_path": str(baseline_path),
+        "command": "legacy-adopt",
+        "receipt": str(receipt_path),
+        "status": "completed",
+        "transaction_id": transaction_id,
+        "vault_id": vault_id,
+    }
 
 
 def ensure_external_cache(vault: Path, cache_root: Path) -> Path:
@@ -1224,6 +1542,21 @@ def parser() -> argparse.ArgumentParser:
     fresh_parser.add_argument("--product-contract", required=True, type=Path)
     fresh_parser.add_argument("--skill-compatibility", required=True, type=Path)
     fresh_parser.add_argument("--bundle-manifest", required=True, type=Path)
+    legacy_plan_parser = commands.add_parser(
+        "legacy-plan", help="只读比较已知历史产品树并生成旧客户纳管建议"
+    )
+    legacy_plan_parser.add_argument("--vault", required=True, type=Path)
+    legacy_plan_parser.add_argument("--path-policy", required=True, type=Path)
+    legacy_plan_parser.add_argument("--catalog", required=True, type=Path)
+    legacy_adopt_parser = commands.add_parser(
+        "legacy-adopt", help="按精确计划与人工审批写入旧客户产品状态"
+    )
+    legacy_adopt_parser.add_argument("--vault", required=True, type=Path)
+    legacy_adopt_parser.add_argument("--cache-root", required=True, type=Path)
+    legacy_adopt_parser.add_argument("--path-policy", required=True, type=Path)
+    legacy_adopt_parser.add_argument("--catalog", required=True, type=Path)
+    legacy_adopt_parser.add_argument("--plan", required=True, type=Path)
+    legacy_adopt_parser.add_argument("--approval", required=True, type=Path)
     status_parser = commands.add_parser("status", help="读取客户产品状态，不产生写入")
     status_parser.add_argument("--vault", required=True, type=Path)
     check_parser = commands.add_parser(
@@ -1268,6 +1601,10 @@ def main() -> int:
     try:
         if args.command == "fresh-install":
             return emit(fresh_install(args))
+        if args.command == "legacy-plan":
+            return emit(legacy_plan(args))
+        if args.command == "legacy-adopt":
+            return emit(legacy_adopt(args))
         if args.command == "status":
             return emit(status(args))
         if args.command == "check":

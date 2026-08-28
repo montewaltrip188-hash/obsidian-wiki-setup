@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/legacy-adoption-receipt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["baseline_id", "baseline_sha256", "operation", "plan_id", "receipt_format", "receipt_sha256", "state_after_sha256", "status", "transaction_id", "vault_id"],
+  "properties": {
+    "baseline_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$"},
+    "baseline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "operation": {"const": "legacy_adopt"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "receipt_format": {"const": 1},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state_after_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"const": "completed"},
+    "transaction_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "vault_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+  }
+}

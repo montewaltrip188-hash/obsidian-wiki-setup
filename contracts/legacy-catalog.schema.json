@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/legacy-catalog.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["catalog_format", "baselines"],
+  "properties": {
+    "catalog_format": {"const": 1},
+    "baselines": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "product_root", "bundle_manifest"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$"},
+          "product_root": {"type": "string", "minLength": 1},
+          "bundle_manifest": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
