@@ -8,9 +8,7 @@
 - `claudecode-wiki-skills`：提供 Wiki Skill 完整版本树；
 - 本安装器仓库：提供激活、组装、验证、部署和回滚入口。
 
-当前 D0 验收基线为产品提交 `4ea70aaf2fd8a13e5eb455263d5214f8dc5bb6eb`，以及 Wiki Skill `v2.0.1` 发布后提交 `b83e321457211c65eb26200ddcb97f45af66c160`。
-
-当前 U1-R 本地候选使用产品 Schema `1.0.0` 和 Wiki Skill `2.1.0`；bundle 仍未分配版本，未 tag、push 或发布。
+当前稳定组合使用产品 Schema `1.0.0`（提交 `25b166192e1cbab27a53191979a3d456e83e5aa5`）、Wiki Skill `2.1.0`（提交 `b327974b27b3d345d94b38ad865504aff3a0c5df`）与 bundle `2.1.0`。安装器的精确来源提交、三仓 tree、候选摘要和三平台回执由 `v2.1.0` tag、GitHub Release 的签名 manifest 与 `release/stable.json` 共同冻结。
 
 ## 默认交付内容
 

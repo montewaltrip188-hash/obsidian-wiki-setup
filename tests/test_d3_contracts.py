@@ -80,6 +80,10 @@ class D3ContractTests(unittest.TestCase):
             release["repositories"]["installer"],
         )
         self.assertIn("bundle `2.1.0`", readme)
+        self.assertIn("产品 Schema `1.0.0`", readme)
+        self.assertIn("b327974b27b3d345d94b38ad865504aff3a0c5df", readme)
+        self.assertNotIn("4ea70aaf2fd8a13e5eb455263d5214f8dc5bb6eb", readme)
+        self.assertNotIn("bundle 仍未分配版本", readme)
         self.assertIn("run_approval_required", readme)
         self.assertIn("D3", readme)
 
