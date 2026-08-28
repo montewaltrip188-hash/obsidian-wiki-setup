@@ -78,7 +78,8 @@ read -r CHANGE_KEY
 
 if [ "$CHANGE_KEY" = "y" ] || [ "$CHANGE_KEY" = "Y" ]; then
     printf "请输入新的 API Key (获取地址: $API_URL): "
-    read -r API_KEY
+    read -r -s API_KEY
+    echo
 else
     API_KEY=$(python3 -c "import json; d=json.load(open('$SETTINGS_PATH')); print(d['env']['ANTHROPIC_AUTH_TOKEN'])" 2>/dev/null)
 fi

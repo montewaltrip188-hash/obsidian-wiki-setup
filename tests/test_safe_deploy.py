@@ -496,6 +496,40 @@ class SafeDeployTests(unittest.TestCase):
         self.assertLess(windows.index("$skillManager install"), windows.index('$vaultDeployer, "deploy"'))
         self.assertLess(mac.index('"$SKILL_MANAGER" install'), mac.index('"$VAULT_DEPLOYER" deploy'))
 
+    def test_declining_existing_vault_upgrade_exits_without_claiming_completion(self) -> None:
+        windows = (REPO_ROOT / "setup-win.ps1").read_text(encoding="utf-8")
+        mac = (REPO_ROOT / "setup-mac.sh").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            windows,
+            r'if \(\$overwrite -ne \'y\'[\s\S]*?\) \{\s*Write-Host "  安装未完成：已保留现有 Vault，未执行部署"[\s\S]*?exit 2\s*\}',
+        )
+        self.assertRegex(
+            mac,
+            r'if \[ "\$OVERWRITE" != "y" \][\s\S]*?yellow "  安装未完成：已保留现有 Vault，未执行部署"\s*exit 2\s*',
+        )
+
+    def test_skill_verify_failure_restores_state_for_install_and_upgrade(self) -> None:
+        windows = (REPO_ROOT / "setup-win.ps1").read_text(encoding="utf-8")
+        mac = (REPO_ROOT / "setup-mac.sh").read_text(encoding="utf-8")
+
+        windows_verify_start = windows.index("$skillVerifyOutput =")
+        windows_verify_end = windows.index("$skillVerify =", windows_verify_start)
+        windows_failure = windows[windows_verify_start:windows_verify_end]
+        self.assertIn('$verifyExit = $LASTEXITCODE', windows_failure)
+        self.assertIn('"install" { "uninstall" }', windows_failure)
+        self.assertIn('"upgrade" { "rollback" }', windows_failure)
+        self.assertIn('$skillManager $restoreCommand --home $env:USERPROFILE', windows_failure)
+        self.assertIn('exit $verifyExit', windows_failure)
+
+        mac_verify_start = mac.index('if ! SKILL_VERIFY=')
+        mac_verify_end = mac.index('SKILL_NAMES=', mac_verify_start)
+        mac_failure = mac[mac_verify_start:mac_verify_end]
+        self.assertIn('install) RESTORE_COMMAND="uninstall"', mac_failure)
+        self.assertIn('upgrade) RESTORE_COMMAND="rollback"', mac_failure)
+        self.assertIn('"$SKILL_MANAGER" "$RESTORE_COMMAND" --home "$HOME"', mac_failure)
+        self.assertIn('exit 1', mac_failure)
+
 
 if __name__ == "__main__":
     unittest.main()

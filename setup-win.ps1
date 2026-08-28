@@ -65,6 +65,9 @@ function Test-Wiki2Activation {
     if (-not (Test-Path -LiteralPath $PublicKeyPath -PathType Leaf)) {
         throw "激活公钥缺失"
     }
+    if (-not (Test-Path -LiteralPath $RevokedIdsPath -PathType Leaf)) {
+        throw "激活撤销清单缺失"
+    }
 
     $payloadSegment = $segments[1]
     $signature = ConvertFrom-Base64Url $segments[2]
@@ -96,18 +99,24 @@ function Test-Wiki2Activation {
     if ([string]$payload.product -cne $Product) { throw "激活码产品不匹配" }
     if ([string]$payload.version -cne $Version) { throw "激活码版本不匹配" }
 
+    $expiresAtMatch = [regex]::Match($payloadJson, '"expires_at"\s*:\s*"([^"]+)"')
+    if (-not $expiresAtMatch.Success) {
+        throw "激活码过期时间格式错误"
+    }
+    $expiresAtText = $expiresAtMatch.Groups[1].Value
+    if ($expiresAtText -notmatch '(?:Z|[+-]\d{2}:\d{2})$') {
+        throw "激活码过期时间必须包含时区"
+    }
     $expiresAt = [DateTimeOffset]::Parse(
-        [string]$payload.expires_at,
+        $expiresAtText,
         [Globalization.CultureInfo]::InvariantCulture,
         [Globalization.DateTimeStyles]::AssumeUniversal
     ).ToUniversalTime()
     if ($expiresAt -le $AtUtc.ToUniversalTime()) { throw "激活码已过期" }
 
-    if (Test-Path -LiteralPath $RevokedIdsPath -PathType Leaf) {
-        $revokedIds = Get-Content -LiteralPath $RevokedIdsPath | ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -and -not $_.StartsWith('#') }
-        if ($revokedIds -ccontains [string]$payload.activation_id) { throw "激活码已撤销" }
-    }
+    $revokedIds = Get-Content -LiteralPath $RevokedIdsPath | ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and -not $_.StartsWith('#') }
+    if ($revokedIds -ccontains [string]$payload.activation_id) { throw "激活码已撤销" }
     return $true
 }
 
@@ -394,21 +403,19 @@ if ($LASTEXITCODE -ne 0) {
 $skillPlan = ($skillPlanOutput -join [Environment]::NewLine) | ConvertFrom-Json
 Write-Host "  Wiki Skill 预检完成：$($skillPlan.action)" -ForegroundColor Green
 
-$skipDeploy = $false
 $allowExistingVault = $false
 if (Test-Path -LiteralPath $defaultVaultPath) {
     Write-Host "  [!] 目录已存在: $defaultVaultPath" -ForegroundColor Yellow
     $overwrite = Read-Host "  是否先保留同级备份再升级？(y/N)"
     if ($overwrite -ne 'y' -and $overwrite -ne 'Y') {
-        Write-Host "  跳过部署" -ForegroundColor Yellow
-        $skipDeploy = $true
+        Write-Host "  安装未完成：已保留现有 Vault，未执行部署" -ForegroundColor Yellow
+        exit 2
     } else {
         $allowExistingVault = $true
     }
 }
 
-if (-not $skipDeploy) {
-    Write-Step "安装 Wiki Skills..."
+Write-Step "安装 Wiki Skills..."
     $skillInstallOutput = & $pythonCommand.Source $skillManager install `
         --source $skillSource --home $env:USERPROFILE 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -419,8 +426,20 @@ if (-not $skipDeploy) {
     $skillVerifyOutput = & $pythonCommand.Source $skillManager verify `
         --home $env:USERPROFILE 2>&1
     if ($LASTEXITCODE -ne 0) {
+        $verifyExit = $LASTEXITCODE
         Write-Host "  [!] Wiki Skill 验收失败：$($skillVerifyOutput -join ' ')" -ForegroundColor Red
-        exit $LASTEXITCODE
+        $restoreCommand = switch ($skillPlan.action) {
+            "install" { "uninstall" }
+            "upgrade" { "rollback" }
+            default { $null }
+        }
+        if ($restoreCommand) {
+            & $pythonCommand.Source $skillManager $restoreCommand --home $env:USERPROFILE | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  [!] Wiki Skill 验收失败，自动恢复也失败，需要人工处理" -ForegroundColor Red
+            }
+        }
+        exit $verifyExit
     }
     $skillVerify = ($skillVerifyOutput -join [Environment]::NewLine) | ConvertFrom-Json
     Write-Host "  Wiki Skills 已安装并验收：$($skillVerify.skills -join ', ')" -ForegroundColor Green
@@ -455,7 +474,6 @@ if (-not $skipDeploy) {
         exit $deployExit
     }
     Write-Host "  知识库已部署到: $defaultVaultPath" -ForegroundColor Green
-}
 
 # ----------------------------------------------------------
 # 5. 配置 Claudian 插件的 Claude CLI 路径

@@ -60,6 +60,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -80,6 +81,8 @@ def parse_utc(value):
 
 try:
     code, key_path, revoked_path, expected_product, expected_version, now_value = sys.argv[1:]
+    if not revoked_path or not os.path.isfile(revoked_path):
+        raise ValueError("revocation list required")
     segments = code.split(".")
     if len(segments) != 3 or segments[0] != "WIKI2":
         raise ValueError("invalid format")
@@ -115,15 +118,11 @@ try:
     if parse_utc(payload["expires_at"]) <= now:
         raise ValueError("expired")
 
-    revoked_ids = set()
-    try:
-        with open(revoked_path, encoding="utf-8-sig") as revoked_file:
-            revoked_ids = {
-                line.strip() for line in revoked_file
-                if line.strip() and not line.lstrip().startswith("#")
-            }
-    except FileNotFoundError:
-        pass
+    with open(revoked_path, encoding="utf-8-sig") as revoked_file:
+        revoked_ids = {
+            line.strip() for line in revoked_file
+            if line.strip() and not line.lstrip().startswith("#")
+        }
     if payload["activation_id"] in revoked_ids:
         raise ValueError("revoked")
 except Exception:
@@ -409,22 +408,20 @@ SKILL_ACTION=$(printf '%s' "$SKILL_PLAN" | "$PYTHON_BIN" -c \
     'import json,sys; print(json.load(sys.stdin)["action"])')
 green "  Wiki Skill 预检完成: $SKILL_ACTION"
 
-SKIP_DEPLOY=false
 ALLOW_EXISTING_VAULT=false
 if [ -e "$DEFAULT_VAULT" ] || [ -L "$DEFAULT_VAULT" ]; then
     yellow "  目录已存在: $DEFAULT_VAULT"
     printf "  是否先保留同级备份再升级？(y/N): "
     read -r OVERWRITE
     if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
-        yellow "  跳过部署"
-        SKIP_DEPLOY=true
+        yellow "  安装未完成：已保留现有 Vault，未执行部署"
+        exit 2
     else
         ALLOW_EXISTING_VAULT=true
     fi
 fi
 
-if [ "$SKIP_DEPLOY" = false ]; then
-    step "安装 Wiki Skills..."
+step "安装 Wiki Skills..."
     if ! SKILL_INSTALL=$("$PYTHON_BIN" "$SKILL_MANAGER" install \
         --source "$SKILL_SOURCE" --home "$HOME" 2>&1); then
         red "  Wiki Skill 安装失败: $SKILL_INSTALL"
@@ -432,6 +429,16 @@ if [ "$SKIP_DEPLOY" = false ]; then
     fi
     if ! SKILL_VERIFY=$("$PYTHON_BIN" "$SKILL_MANAGER" verify --home "$HOME" 2>&1); then
         red "  Wiki Skill 验收失败: $SKILL_VERIFY"
+        RESTORE_COMMAND=""
+        case "$SKILL_ACTION" in
+            install) RESTORE_COMMAND="uninstall" ;;
+            upgrade) RESTORE_COMMAND="rollback" ;;
+        esac
+        if [ -n "$RESTORE_COMMAND" ]; then
+            if ! "$PYTHON_BIN" "$SKILL_MANAGER" "$RESTORE_COMMAND" --home "$HOME" >/dev/null; then
+                red "  Wiki Skill 验收失败，自动恢复也失败，需要人工处理"
+            fi
+        fi
         exit 1
     fi
     SKILL_NAMES=$(printf '%s' "$SKILL_VERIFY" | "$PYTHON_BIN" -c \
@@ -469,7 +476,6 @@ if [ "$SKIP_DEPLOY" = false ]; then
         fi
         exit "$DEPLOY_EXIT"
     fi
-fi
 
 # ----------------------------------------------------------
 # 5. 配置 Claudian 插件

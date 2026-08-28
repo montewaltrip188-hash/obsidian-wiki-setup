@@ -81,7 +81,13 @@ $changeKey = Read-Host "  "
 
 if ($changeKey -eq 'y' -or $changeKey -eq 'Y') {
     Write-Host "请输入新的 API Key (获取地址: $apiUrl)" -ForegroundColor Yellow
-    $apiKey = Read-Host "  API Key"
+    $secureApiKey = Read-Host "  API Key" -AsSecureString
+    $apiKeyBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureApiKey)
+    try {
+        $apiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($apiKeyBstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($apiKeyBstr)
+    }
 } else {
     $apiKey = $current.env.ANTHROPIC_AUTH_TOKEN
 }

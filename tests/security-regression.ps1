@@ -129,7 +129,7 @@ Test-Case "Windows 接受有效的 WIKI2 RSA 激活码" {
     $code = New-TestActivationCode -Rsa $rsa -ActivationId "TEST-VALID-001" -ExpiresAt "2027-08-28T00:00:00Z"
     $result = Invoke-WindowsActivationValidation -Code $code -PublicKeyPath $testPublicKeyPath -RevokedIdsPath $testRevokedIdsPath
     if ($result.ExitCode -ne 0) {
-        throw "有效激活码被拒绝（退出码 $($result.ExitCode)）"
+        throw "有效激活码被拒绝（退出码 $($result.ExitCode)）：$($result.Output)"
     }
 }
 
@@ -166,6 +166,17 @@ Test-Case "Windows 和 macOS 拒绝已撤销的激活 ID" {
     } finally {
         [IO.File]::WriteAllText($testRevokedIdsPath, "", [Text.UTF8Encoding]::new($false))
     }
+}
+
+Test-Case "Windows 和 macOS 拒绝不带时区的 expires_at" {
+    $code = New-TestActivationCode -Rsa $rsa -ActivationId "TEST-NAIVE-TIME-001" -ExpiresAt "2027-08-28T00:00:00"
+    Assert-RejectedOnBothPlatforms -Code $code -PublicKeyPath $testPublicKeyPath -RevokedIdsPath $testRevokedIdsPath
+}
+
+Test-Case "Windows 和 macOS 在撤销清单缺失时拒绝激活" {
+    $missingRevokedIdsPath = Join-Path $testRoot "missing-revoked-activation-ids.txt"
+    $code = New-TestActivationCode -Rsa $rsa -ActivationId "TEST-MISSING-REVOCATION-001" -ExpiresAt "2027-08-28T00:00:00Z"
+    Assert-RejectedOnBothPlatforms -Code $code -PublicKeyPath $testPublicKeyPath -RevokedIdsPath $missingRevokedIdsPath
 }
 
 Test-Case "Windows 和 macOS 拒绝产品不匹配的 WIKI2 激活码" {
@@ -228,6 +239,20 @@ Test-Case "Windows 和 macOS 均隐藏 API Key 输入" {
     }
     if ($mac -notmatch 'read -r -s API_KEY') {
         throw "macOS API Key 输入未隐藏"
+    }
+}
+
+Test-Case "Windows 和 macOS 的改模型入口均隐藏 API Key 输入" {
+    $windows = Get-Content -LiteralPath (Join-Path $repoRoot "change-model.ps1") -Raw
+    $mac = Get-Content -LiteralPath (Join-Path $repoRoot "change-model.sh") -Raw
+    if ($windows -notmatch 'Read-Host\s+"\s*API Key"\s+-AsSecureString') {
+        throw "Windows 改模型入口的 API Key 输入未隐藏"
+    }
+    if ($windows -notmatch 'SecureStringToBSTR' -or $windows -notmatch 'ZeroFreeBSTR') {
+        throw "Windows 改模型入口未安全释放 API Key 的明文桥接缓冲区"
+    }
+    if ($mac -notmatch 'read -r -s API_KEY') {
+        throw "macOS 改模型入口的 API Key 输入未隐藏"
     }
 }
 
