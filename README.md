@@ -108,6 +108,10 @@ U3 用 `scripts/joint-update.ps1`（Windows）或 `scripts/joint-update.sh`（ma
 
 缺少产品状态的旧 Vault 始终返回 `legacy_adoption_required`。维护者用已知历史产品树 catalog 运行严格只读 `legacy-plan`：它只比较路径政策声明的产品受管路径，不扫描客户内容目录；只有恰好一个历史 Base 完全匹配时才给出推荐。随后仍须提供绑定 `plan_id`、Base ID 和 Base SHA-256 的人工审批，`legacy-adopt` 才会在原 Vault 写入产品状态，并把官方 Base 与回执写到 Vault 外部缓存。多个精确候选、本地修改或缺失项都会明示为不确定项，不会自动猜测。完整合同见 `contracts/legacy-adoption-v1.md`。
 
+## D2：只读三仓发布计划
+
+维护者使用 `release/orchestrator.py plan` 冻结产品、Skill 与安装器的三个精确 40 位 commit。编排器只读来源仓库，在新建的外部 workspace 中建立 detached clone，为 Windows 与 macOS 各构建两次并验证字节可复现候选，最后写出带 seal 的 `release-plan.json`。`status` 只读检查 clone 与候选资产是否漂移。该阶段不 commit、tag、push、创建 Release、覆盖安装资产或更新 stable 指针；未分配 bundle 版本时只返回 `version_approval_required`。完整合同见 `contracts/release-orchestrator-v1.md`。
+
 ## Skill 安装位置
 
 Wiki Skill 使用用户级版本化安装：
