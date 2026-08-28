@@ -13,6 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "release" / "d3_candidate.py"
+sys.path.insert(0, str(ROOT / "release"))
+from d3_candidate import acceptance_temp_parent  # noqa: E402
 
 
 def canonical_json(value: object) -> bytes:
@@ -135,6 +137,12 @@ def write_fixture(
 
 
 class D3CandidateTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows 短路径临时根合同")
+    def test_windows_acceptance_uses_drive_root_for_path_budget(self):
+        parent = acceptance_temp_parent()
+        self.assertIsNotNone(parent)
+        self.assertEqual(parent, Path(parent.drive + "\\"))
+
     def test_macos_ci_uses_two_architectures_pinned_actions_and_attested_receipts(self):
         workflow = (
             ROOT / ".github" / "workflows" / "d3-macos-candidate.yml"

@@ -260,6 +260,17 @@ def atomic_json(path: Path, value: dict) -> None:
             temporary.unlink()
 
 
+def acceptance_temp_parent() -> Path | None:
+    """Windows 使用短盘符根目录，避免受控合成 HOME 超出路径预算。"""
+    if os.name != "nt":
+        return None
+    system_drive = os.environ.get("SystemDrive") or Path.cwd().drive
+    drive_root = Path(system_drive + "\\").resolve()
+    if not drive_root.is_dir():
+        raise D3Error("WINDOWS_SHORT_TEMP_ROOT_UNAVAILABLE")
+    return drive_root
+
+
 def run_acceptance(args: argparse.Namespace) -> dict:
     ready = preflight(args.release_plan, args.candidate, args.target)
     if args.target.startswith("macos-") and sys.platform != "darwin":
@@ -270,7 +281,9 @@ def run_acceptance(args: argparse.Namespace) -> dict:
     if machine not in TARGET_MACHINES[args.target]:
         raise D3Error("MACOS_MACHINE_TARGET_MISMATCH")
     candidate_before = file_sha256(args.candidate)
-    with tempfile.TemporaryDirectory(prefix="d3-macos-acceptance-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="d3-", dir=acceptance_temp_parent()
+    ) as temporary:
         root = Path(temporary)
         extracted = root / "candidate"
         extracted.mkdir()
