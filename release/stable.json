@@ -1,0 +1,49 @@
+{
+  "assets": {
+    "macos-universal": {
+      "name": "obsidian-llm-wiki-2.1.0-macos-universal.zip",
+      "sha256": "9d278673888117cde46b267d28b781d28fa994e89a8e8dbf97da3a30d2564493",
+      "size": 432425651,
+      "url": "https://github.com/montewaltrip188-hash/obsidian-wiki-setup/releases/download/v2.1.0/obsidian-llm-wiki-2.1.0-macos-universal.zip"
+    },
+    "windows-x64": {
+      "name": "obsidian-llm-wiki-2.1.0-windows-x64.zip",
+      "sha256": "f190c1855e6c588b4d4d6792d3ac3a03a06176f6b1d02e2be5e30c3ddca72ed3",
+      "size": 277556170,
+      "url": "https://github.com/montewaltrip188-hash/obsidian-wiki-setup/releases/download/v2.1.0/obsidian-llm-wiki-2.1.0-windows-x64.zip"
+    }
+  },
+  "bundle_version": "2.1.0",
+  "channel": "stable",
+  "manifest": {
+    "name": "release-manifest.json",
+    "sha256": "ec5db29fb0fc8a9d3870364c3fd740a1c76f601b72a36a37bf42ca2c92c41168",
+    "size": 3973,
+    "url": "https://github.com/montewaltrip188-hash/obsidian-wiki-setup/releases/download/v2.1.0/release-manifest.json"
+  },
+  "pointer_format": 1,
+  "release_state": "stable",
+  "repository": "montewaltrip188-hash/obsidian-wiki-setup",
+  "signature": {
+    "name": "release-manifest.sig",
+    "sha256": "8a594bdfdcefe557e8761a4dce5df06c0182c762ad980818ec54bbcc346447ef",
+    "size": 384,
+    "url": "https://github.com/montewaltrip188-hash/obsidian-wiki-setup/releases/download/v2.1.0/release-manifest.sig"
+  },
+  "tag": "v2.1.0",
+  "trust": {
+    "key_id": "c1f596094a9a54ada888502a2ab7ef6bc5fecf82d4281dd4bbae2ae7bc9d9938",
+    "pem": {
+      "name": "release-signing-public-key.pem",
+      "sha256": "3cb1a3fec3d028d57735bb576939bd0c49f7589aa2edd8ff61ac41f3d5cd0802",
+      "size": 634,
+      "url": "https://raw.githubusercontent.com/montewaltrip188-hash/obsidian-wiki-setup/v2.1.0/release/release-signing-public-key.pem"
+    },
+    "xml": {
+      "name": "release-signing-public-key.xml",
+      "sha256": "3ab5cb740f3e92d3230561fe231f0f761e5fa1c3c058483a2ed2a48071b4245b",
+      "size": 584,
+      "url": "https://raw.githubusercontent.com/montewaltrip188-hash/obsidian-wiki-setup/v2.1.0/release/release-signing-public-key.xml"
+    }
+  }
+}
