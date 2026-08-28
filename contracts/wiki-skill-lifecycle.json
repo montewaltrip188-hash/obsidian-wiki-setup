@@ -29,6 +29,15 @@
     "codex_entries": "~/.agents/skills/<skill>",
     "claude_entries": "~/.claude/skills/<skill>"
   },
+  "plan": {
+    "strictly_read_only": true,
+    "actions": [
+      "install",
+      "upgrade",
+      "already_installed"
+    ],
+    "precedes_vault_write": true
+  },
   "ownership": {
     "state": "~/.agents/packages/claudecode-wiki-skills/state.json",
     "version_manifest": ".wiki-skill-install.json",

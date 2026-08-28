@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -72,6 +73,33 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         else:
             os.symlink(codex_root, claude_root, target_is_directory=True)
 
+    def snapshot_home(self):
+        if not self.home.exists():
+            return None
+        home_stat = os.lstat(self.home)
+        snapshot = {
+            ".": {
+                "mode": home_stat.st_mode,
+                "size": home_stat.st_size,
+                "mtime_ns": home_stat.st_mtime_ns,
+            }
+        }
+        for current, directories, files in os.walk(self.home, followlinks=False):
+            current_path = Path(current)
+            for name in sorted([*directories, *files]):
+                path = current_path / name
+                stat = os.lstat(path)
+                relative = path.relative_to(self.home).as_posix()
+                record = {
+                    "mode": stat.st_mode,
+                    "size": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                }
+                if path.is_file() and not path.is_symlink():
+                    record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                snapshot[relative] = record
+        return snapshot
+
     def test_plan_is_read_only_and_defaults_to_three_core_skills(self):
         before = sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*"))
 
@@ -87,7 +115,73 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertFalse(plan["skill_installed"])
         self.assertFalse(plan["keyword_runtime_ready"])
         self.assertEqual("KEYWORD_RUNTIME_UNPROVISIONED", plan["keyword_runtime_error"])
+        self.assertEqual("install", plan["action"])
         self.assertEqual("ready", plan["status"])
+
+    def test_plan_blocks_unknown_same_name_entry_without_writing_home(self):
+        collision = self.home / ".agents" / "skills" / "design-juan-wiki"
+        collision.mkdir(parents=True)
+        (collision / "owner.txt").write_text("unknown\n", encoding="utf-8")
+        before = self.snapshot_home()
+
+        blocked = self.run_cli(
+            "plan", "--source", self.source, "--home", self.home, expected=2
+        )
+
+        self.assertEqual("blocked", blocked["status"])
+        self.assertIn("拒绝覆盖", blocked["error"])
+        self.assertEqual(before, self.snapshot_home())
+
+    def test_plan_blocks_unowned_package_directory_without_writing_home(self):
+        orphan = (
+            self.home
+            / ".agents"
+            / "packages"
+            / "claudecode-wiki-skills"
+            / "orphan.txt"
+        )
+        orphan.parent.mkdir(parents=True)
+        orphan.write_text("unknown\n", encoding="utf-8")
+        before = self.snapshot_home()
+
+        blocked = self.run_cli(
+            "plan", "--source", self.source, "--home", self.home, expected=2
+        )
+
+        self.assertEqual("blocked", blocked["status"])
+        self.assertIn("无状态包目录", blocked["error"])
+        self.assertEqual(before, self.snapshot_home())
+
+    def test_plan_reports_managed_upgrade_without_writing_home(self):
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        self._make_source("2.0.2")
+        before = self.snapshot_home()
+
+        plan = self.run_cli("plan", "--source", self.source, "--home", self.home)
+
+        self.assertEqual("upgrade", plan["action"])
+        self.assertEqual("2.0.1", plan["active_version"])
+        self.assertEqual(before, self.snapshot_home())
+
+    def test_plan_reports_already_installed_and_blocks_state_drift_read_only(self):
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        before = self.snapshot_home()
+        plan = self.run_cli("plan", "--source", self.source, "--home", self.home)
+        self.assertEqual("already_installed", plan["action"])
+        self.assertEqual(before, self.snapshot_home())
+
+        state_path = (
+            self.home / ".agents" / "packages" / "claudecode-wiki-skills" / "state.json"
+        )
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["active_version"] = "9.9.9"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        drifted = self.snapshot_home()
+        blocked = self.run_cli(
+            "plan", "--source", self.source, "--home", self.home, expected=2
+        )
+        self.assertEqual("blocked", blocked["status"])
+        self.assertEqual(drifted, self.snapshot_home())
 
     def test_machine_readable_contract_freezes_public_seams_and_manual_gates(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
@@ -101,6 +195,10 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertIn("unknown_same_name_entry", contract["fail_closed_on"])
         self.assertIn("fingerprint_drift", contract["fail_closed_on"])
         self.assertEqual("logical_runtime_to_owned_root", contract["ownership"]["runtime_aliases"])
+        self.assertTrue(contract["plan"]["strictly_read_only"])
+        self.assertEqual(
+            ["install", "upgrade", "already_installed"], contract["plan"]["actions"]
+        )
 
     def test_unsafe_version_cannot_escape_version_directory(self):
         (self.source / "VERSION").write_text("..\n", encoding="utf-8")

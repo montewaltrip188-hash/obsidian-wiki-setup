@@ -72,7 +72,7 @@ def build_plan(args):
     if not (source / "core" / "wiki-hybrid-search" / "scripts" / "wiki_search.py").is_file():
         raise LifecycleError("源包缺少关键词 Query 入口脚本")
     owned_roots, runtime_aliases = detect_runtime_layout(args.home.absolute())
-    return {
+    plan = {
         "status": "ready",
         "version": version,
         "skills": skills,
@@ -84,6 +84,7 @@ def build_plan(args):
         "runtime_aliases": runtime_aliases,
         "owned_roots": {owner: str(root) for owner, root in owned_roots.items()},
     }
+    return assess_plan(plan, args.home.absolute())
 
 
 def sha256(path):
@@ -161,6 +162,37 @@ def preflight_roots(owned_roots, skills):
             destination = root / name
             if destination.exists() or destination.is_symlink():
                 raise LifecycleError(f"发现同名未知入口，拒绝覆盖：{destination}")
+
+
+def assess_plan(plan, home):
+    package = home / ".agents" / "packages" / PACKAGE_NAME
+    state_path = package / "state.json"
+    target_root = package / "versions" / plan["version"]
+    owned_roots = {owner: Path(path) for owner, path in plan["owned_roots"].items()}
+    if not state_path.exists():
+        if package.exists():
+            raise LifecycleError("发现无状态包目录，拒绝接管")
+        preflight_roots(owned_roots, plan["skills"])
+        plan["action"] = "install"
+        plan["active_version"] = None
+        return plan
+
+    verify(argparse.Namespace(home=home))
+    _, _, state = load_state(home)
+    if state["owned_skills"] != plan["skills"]:
+        raise LifecycleError("已有受管安装的 Skill 集合与候选不兼容")
+    plan.update(capability_receipt(True))
+    plan["active_version"] = state["active_version"]
+    if state["active_version"] == plan["version"]:
+        current = package / "versions" / plan["version"]
+        if inventory(Path(plan["source"])) != inventory(current):
+            raise LifecycleError("相同版本号对应不同文件，拒绝覆盖")
+        plan["action"] = "already_installed"
+        return plan
+    if target_root.exists():
+        raise LifecycleError("目标版本目录已存在但不是活动版本，拒绝覆盖")
+    plan["action"] = "upgrade"
+    return plan
 
 
 def create_copy_wrapper(source, destination):
