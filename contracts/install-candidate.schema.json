@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://juanyong.invalid/contracts/install-candidate-v1.schema.json",
+  "title": "安装候选清单 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "candidate_id",
+    "default_skills",
+    "files",
+    "offline_query_baseline",
+    "optional_skills",
+    "platform",
+    "schema_version",
+    "sources"
+  ],
+  "properties": {
+    "candidate_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "default_skills": {
+      "const": ["design-juan-wiki", "wiki-hybrid-search", "ocr-and-documents"]
+    },
+    "offline_query_baseline": {"const": "keyword"},
+    "optional_skills": {"const": ["ima-skill"]},
+    "platform": {"enum": ["windows", "macos"]},
+    "schema_version": {"const": 1},
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installer", "product", "skill"],
+      "properties": {
+        "installer": {"$ref": "#/$defs/source"},
+        "product": {"$ref": "#/$defs/source"},
+        "skill": {"$ref": "#/$defs/source"}
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/file"}
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "path", "sha256", "size", "source", "source_path"],
+      "properties": {
+        "mode": {"enum": ["100644", "100755"]},
+        "path": {"type": "string", "pattern": "^payload/"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size": {"type": "integer", "minimum": 0},
+        "source": {"enum": ["installer", "product", "skill"]},
+        "source_path": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

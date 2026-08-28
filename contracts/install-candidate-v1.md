@@ -1,0 +1,63 @@
+# 安装候选合同 v1
+
+`tools/install_candidate.py` 是维护者侧、仅依赖 Python 标准库的组装器。公开接缝只有：
+
+- `plan`：只接受三个仓库各自精确的 40 位 commit，记录对应 tree 和目标平台。
+- `build`：只读取已绑定 commit 的 Git blob，并且只写入一个尚不存在的 staging 目录。
+- `verify`：重新计算候选 ID、逐文件 SHA-256 和确定性 ZIP，发现文件集合或任一字节变化即失败。
+
+## 候选布局
+
+```text
+staging/
+├── manifest.json
+├── deploy-manifest.json
+├── vault.zip
+├── candidate.zip
+└── payload/
+    ├── vault/
+    ├── skills/claudecode-wiki-skills/
+    └── installer/
+```
+
+产品仓库是 `payload/vault/` 的唯一来源。Skill 仓库以完整目录树进入候选，以保留核心 Skill 对共享 `references/` 和 `scripts/` 的相对引用；默认只发现三个核心 Skill，IMA 保持可选。安装器仓库提供安装入口，但旧 `vault.zip` 不能再作为产品来源。
+
+`vault.zip` 是构建产物而不是仓库资产，只包含唯一顶层 `vault/`。`deploy-manifest.json` 是安装安全层的窄接口：
+
+```json
+{
+  "schema_version": 1,
+  "archive": {"sha256": "...", "size": 123},
+  "vault": {
+    "tree_sha256": "...",
+    "files": [{"path": "CLAUDE.md", "sha256": "...", "size": 123}]
+  }
+}
+```
+
+`tree_sha256` 按 UTF-8 路径排序，逐项拼接 `path\0size\0sha256\n` 后计算 SHA-256。安装器客户 payload 使用显式平台白名单；仓库级安全扫描仍覆盖完整 installer tree。
+
+## 失败即停止
+
+以下任一条件都会在创建 staging 前停止：
+
+- ref 不是精确的 40 位 commit，或 commit/tree 与计划不一致；
+- 缺少产品合同或三个核心 Skill 的 `SKILL.md`；
+- 路径穿越、绝对路径、大小写碰撞、Git symlink/submodule；
+- Git LFS 指针、任何 tracked ZIP、疑似下载令牌或私钥；
+- staging 已存在。
+
+`verify` 还会拒绝清单之外的额外文件、缺失文件、链接和非确定性 ZIP。该合同负责组装与完整性，不负责发行签名、激活授权或覆盖已有 Vault；这些行为由上层发行与安装流程控制。
+
+## 示例
+
+```powershell
+./scripts/install-candidate.ps1 plan `
+  --product-repo <product> --product-ref <40位提交> `
+  --skill-repo <skill> --skill-ref <40位提交> `
+  --installer-repo <installer> --installer-ref <40位提交> `
+  --platform windows --output plan.json
+
+./scripts/install-candidate.ps1 build --plan plan.json --staging candidate
+./scripts/install-candidate.ps1 verify --staging candidate
+```
