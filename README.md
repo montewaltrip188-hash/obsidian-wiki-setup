@@ -18,6 +18,8 @@
 - 三个核心 Skill：`design-juan-wiki`、`wiki-hybrid-search`、`ocr-and-documents`；
 - `ima-skill` 仅在显式选择时安装；
 - Windows 或 macOS 对应平台的安装入口；
+- `astral-sh/python-build-standalone` release `20260825` 的 CPython `3.12.14 install_only`：Windows x64，或 macOS Intel + Apple Silicon；
+- 锁定的 NumPy、Requests、Jieba 与传递依赖，以及逐项许可证、SBOM 和运行时安装清单；
 - 逐文件 SHA-256、来源 commit、tree 和候选 ID 清单。
 
 安装器不再额外夹带产品仓库中不存在的“100+ 模板”“3 篇使用指南”或旧 `.claude` Skills。
@@ -51,6 +53,11 @@ candidate/
 ├── extract-vault.py
 ├── activation-public-key.xml
 ├── tools/manage_wiki_skills.py
+├── tools/verify_keyword_runtime.py
+├── runtime/SBOM.json
+├── runtime/THIRD-PARTY-NOTICES.md
+├── runtime/runtime-install-manifest.json
+├── runtime/targets/<platform-arch>/
 └── skills/claudecode-wiki-skills/
 ```
 
@@ -110,7 +117,7 @@ U3 用 `scripts/joint-update.ps1`（Windows）或 `scripts/joint-update.sh`（ma
 
 ## D2：只读三仓发布计划
 
-维护者使用 `release/orchestrator.py plan` 冻结产品、Skill 与安装器的三个精确 40 位 commit。编排器只读来源仓库，在新建的外部 workspace 中建立 detached clone，为 Windows 与 macOS 各构建两次并验证字节可复现候选，最后写出带 seal 的 `release-plan.json`。`status` 只读检查 clone 与候选资产是否漂移。该阶段不 commit、tag、push、创建 Release、覆盖安装资产或更新 stable 指针；离线关键词 Query 运行时未就绪时优先返回 `runtime_provisioning_required`，运行时就绪后才允许进入 `version_approval_required`。完整合同见 `contracts/release-orchestrator-v1.md`。
+维护者使用 `release/orchestrator.py plan` 冻结产品、Skill 与安装器的三个精确 40 位 commit。编排器只读来源仓库，在新建的外部 workspace 中建立 detached clone，为 Windows 与 macOS 各构建两次并验证字节可复现候选，最后写出带 seal 的 `release-plan.json`。`status` 只读检查 clone 与候选资产是否漂移。该阶段不 commit、tag、push、创建 Release、覆盖安装资产或更新 stable 指针；候选包内置并验签 `cpython-3.12.14+20260825` 三平台离线关键词 Query 运行时，客户端不联网补包、不修改系统 Python。运行时合同未闭合时返回 `runtime_provisioning_required`，闭合后才允许进入 `version_approval_required`。完整合同见 `contracts/release-orchestrator-v1.md`。
 
 ## Skill 安装位置
 
@@ -134,6 +141,6 @@ Claude Code 与 Codex 指向同一份物理版本树。安装器支持 `plan / i
 
 ## 当前发布门禁
 
-D0 本地候选尚未达到公开发布条件：Wiki Skill 已能安装和发现，但关键词 Query 仍需要 Python 解释器以及锁定的 `requests / jieba / numpy` 依赖包。安装器不会在后台自动联网安装依赖，当前能力回执会明确返回 `KEYWORD_RUNTIME_UNPROVISIONED`；向量检索继续保持可选。
+D2-RUNTIME 本地候选已闭合三平台解释器、锁定依赖、许可证、SBOM、事务安装和纯合成关键词 Query 探针；向量检索继续保持可选。客户端不联网补包、不修改系统 Python，也不使用客户内容目录做运行时验收。
 
-在确定跨平台离线 Python 运行时方案、发行版本号并完成独立安装验收前，不应把本候选标记为 stable，也不应让历史 v2.1 下载脚本冒充新的跨仓库候选。
+bundle 仍为未分配版本的 `unreleased_candidate`。在完成精确三仓候选的独立安装验收、macOS 双架构实机/CI 验收和后续版本门禁前，不得标记为 stable，不得 tag、push 或发布。

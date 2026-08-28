@@ -31,6 +31,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+MACHINE_ARCH=$(uname -m)
+case "$MACHINE_ARCH" in
+    arm64|aarch64) RUNTIME_SOURCE="$SCRIPT_DIR/runtime/targets/macos-arm64" ;;
+    x86_64|amd64) RUNTIME_SOURCE="$SCRIPT_DIR/runtime/targets/macos-x64" ;;
+    *) RUNTIME_SOURCE="" ;;
+esac
+PACKAGED_PYTHON_BIN="${RUNTIME_SOURCE:+$RUNTIME_SOURCE/python/bin/python3}"
+
 green()  { printf "\033[32m%s\033[0m\n" "$1"; }
 yellow() { printf "\033[33m%s\033[0m\n" "$1"; }
 red()    { printf "\033[31m%s\033[0m\n" "$1"; }
@@ -45,7 +53,9 @@ verify_wiki2_activation() {
     local now_utc="$6"
     local python_bin=""
 
-    if command -v python3 >/dev/null 2>&1; then
+    if [ -n "$PACKAGED_PYTHON_BIN" ] && [ -x "$PACKAGED_PYTHON_BIN" ]; then
+        python_bin="$PACKAGED_PYTHON_BIN"
+    elif command -v python3 >/dev/null 2>&1; then
         python_bin="python3"
     elif command -v python >/dev/null 2>&1; then
         python_bin="python"
@@ -154,6 +164,13 @@ else
 fi
 
 [ "$VALIDATE_ACTIVATION_ONLY" = true ] && exit 0
+
+if [ -z "$RUNTIME_SOURCE" ] || [ ! -f "$RUNTIME_SOURCE/.runtime-target.json" ] || \
+   [ ! -x "$PACKAGED_PYTHON_BIN" ]; then
+    red "  安装包不含当前架构 ($MACHINE_ARCH) 的已签名离线 Query 运行时"
+    exit 1
+fi
+PYTHON_BIN="$PACKAGED_PYTHON_BIN"
 
 # ----------------------------------------------------------
 # 1. 安装 Obsidian
@@ -272,7 +289,7 @@ SETTINGS_PATH="$CLAUDE_DIR/settings.json"
 SKIP_API=false
 
 if [ -f "$SETTINGS_PATH" ]; then
-    EXISTING_KEY=$(python3 -c "import json; d=json.load(open('$SETTINGS_PATH')); print(d.get('env',{}).get('ANTHROPIC_AUTH_TOKEN',''))" 2>/dev/null || echo "")
+    EXISTING_KEY=$("$PYTHON_BIN" -c "import json; d=json.load(open('$SETTINGS_PATH')); print(d.get('env',{}).get('ANTHROPIC_AUTH_TOKEN',''))" 2>/dev/null || echo "")
     if [ -n "$EXISTING_KEY" ] && [ "$EXISTING_KEY" != "sk-YOUR-API-KEY" ]; then
         green "  API 已配置，跳过"
         SKIP_API=true
@@ -379,28 +396,20 @@ VAULT_MANIFEST="$SCRIPT_DIR/deploy-manifest.json"
 VAULT_DEPLOYER="$SCRIPT_DIR/extract-vault.py"
 SKILL_SOURCE="$SCRIPT_DIR/skills/claudecode-wiki-skills"
 SKILL_MANAGER="$SCRIPT_DIR/tools/manage_wiki_skills.py"
+RUNTIME_PROBE="$SCRIPT_DIR/tools/verify_keyword_runtime.py"
 for required_file in "$VAULT_ZIP" "$VAULT_MANIFEST" "$VAULT_DEPLOYER"; do
     if [ ! -f "$required_file" ]; then
         red "  缺少安全部署文件: $required_file"
         exit 1
     fi
 done
-if [ ! -f "$SKILL_MANAGER" ] || [ ! -d "$SKILL_SOURCE" ]; then
+if [ ! -f "$SKILL_MANAGER" ] || [ ! -f "$RUNTIME_PROBE" ] || [ ! -d "$SKILL_SOURCE" ]; then
     red "  缺少 Wiki Skill 安装组件"
     exit 1
 fi
-if command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
-else
-    red "  安全部署需要 Python 3"
-    exit 1
-fi
-
 # 在修改 Vault 前完成 Skill 冲突与所有权只读预检，避免半安装。
 if ! SKILL_PLAN=$("$PYTHON_BIN" "$SKILL_MANAGER" plan \
-    --source "$SKILL_SOURCE" --home "$HOME" 2>&1); then
+    --source "$SKILL_SOURCE" --home "$HOME" --runtime-source "$RUNTIME_SOURCE" 2>&1); then
     red "  Wiki Skill 预检未通过: $SKILL_PLAN"
     exit 1
 fi
@@ -424,7 +433,7 @@ fi
 
 step "安装 Wiki Skills..."
     if ! SKILL_INSTALL=$("$PYTHON_BIN" "$SKILL_MANAGER" install \
-        --source "$SKILL_SOURCE" --home "$HOME" 2>&1); then
+        --source "$SKILL_SOURCE" --home "$HOME" --runtime-source "$RUNTIME_SOURCE" 2>&1); then
         red "  Wiki Skill 安装失败: $SKILL_INSTALL"
         exit 1
     fi
@@ -450,8 +459,23 @@ step "安装 Wiki Skills..."
         'import json,sys; print(str(json.load(sys.stdin)["keyword_runtime_ready"]).lower())')
     green "  Wiki Skills 已安装并验收: $SKILL_NAMES"
     if [ "$KEYWORD_READY" != "true" ]; then
-        yellow "  关键词 Query 运行时尚未随包提供: KEYWORD_RUNTIME_UNPROVISIONED"
+        red "  离线关键词 Query 运行时验收失败"
+        "$PYTHON_BIN" "$SKILL_MANAGER" undo --home "$HOME" --receipt "$SKILL_UNDO_RECEIPT" >/dev/null || true
+        exit 1
     fi
+    INSTALLED_VERSION=$(printf '%s' "$SKILL_INSTALL" | "$PYTHON_BIN" -c \
+        'import json,sys; print(json.load(sys.stdin)["version"])')
+    INSTALLED_ROOT="$HOME/.agents/packages/claudecode-wiki-skills/versions/$INSTALLED_VERSION"
+    INSTALLED_RUNTIME_PYTHON="$INSTALLED_ROOT/.runtime/python/bin/python3"
+    INSTALLED_QUERY_SCRIPT="$INSTALLED_ROOT/core/wiki-hybrid-search/scripts/wiki_search.py"
+    if ! RUNTIME_PROBE_OUTPUT=$("$PYTHON_BIN" "$RUNTIME_PROBE" \
+        --runtime-python "$INSTALLED_RUNTIME_PYTHON" \
+        --query-script "$INSTALLED_QUERY_SCRIPT" 2>&1); then
+        red "  离线关键词 Query 运行时实测失败: $RUNTIME_PROBE_OUTPUT"
+        "$PYTHON_BIN" "$SKILL_MANAGER" undo --home "$HOME" --receipt "$SKILL_UNDO_RECEIPT" >/dev/null || true
+        exit 1
+    fi
+    green "  离线关键词 Query 运行时实测通过"
 
     yellow "  正在验证候选包并安全部署知识库..."
     DEPLOY_ARGS=(

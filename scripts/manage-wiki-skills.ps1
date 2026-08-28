@@ -5,7 +5,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ToolPath = Join-Path (Split-Path -Parent $PSScriptRoot) "tools\manage_wiki_skills.py"
+$Root = Split-Path -Parent $PSScriptRoot
+$ToolPath = Join-Path $Root "tools\manage_wiki_skills.py"
+$PythonPath = Join-Path $Root "runtime\targets\windows-x64\python\python.exe"
+if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
+    throw "缺少候选包内 Windows x64 离线运行时"
+}
 
-python $ToolPath @LifecycleArguments
+& $PythonPath $ToolPath @LifecycleArguments
 exit $LASTEXITCODE

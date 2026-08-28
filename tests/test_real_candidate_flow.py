@@ -127,6 +127,8 @@ class RealCandidateFlowTest(unittest.TestCase):
                 home = root / "home"
                 manager = package / "tools" / "manage_wiki_skills.py"
                 source = package / "skills" / "claudecode-wiki-skills"
+                runtime_target = "windows-x64" if platform == "windows" else "macos-x64"
+                runtime_source = package / "runtime" / "targets" / runtime_target
                 plan_result = json.loads(
                     run(
                         sys.executable,
@@ -136,6 +138,8 @@ class RealCandidateFlowTest(unittest.TestCase):
                         source,
                         "--home",
                         home,
+                        "--runtime-source",
+                        runtime_source,
                     ).stdout
                 )
                 self.assertEqual(plan_result["action"], "install")
@@ -148,13 +152,12 @@ class RealCandidateFlowTest(unittest.TestCase):
                         source,
                         "--home",
                         home,
+                        "--runtime-source",
+                        runtime_source,
                     ).stdout
                 )
-                self.assertFalse(install_result["keyword_runtime_ready"])
-                self.assertEqual(
-                    install_result["keyword_runtime_error"],
-                    "KEYWORD_RUNTIME_UNPROVISIONED",
-                )
+                self.assertTrue(install_result["keyword_runtime_ready"])
+                self.assertIsNone(install_result["keyword_runtime_error"])
                 verify_result = json.loads(
                     run(sys.executable, manager, "verify", "--home", home).stdout
                 )

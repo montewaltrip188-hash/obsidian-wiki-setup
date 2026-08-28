@@ -20,6 +20,7 @@ CORE_SKILLS = ("design-juan-wiki", "wiki-hybrid-search", "ocr-and-documents")
 PACKAGE_NAME = "claudecode-wiki-skills"
 KEYWORD_RUNTIME_ERROR = "KEYWORD_RUNTIME_UNPROVISIONED"
 MUTATION_LOCK_ERROR = "INSTALL_TRANSACTION_LOCKED"
+RUNTIME_DIRECTORY = ".runtime"
 
 
 class LifecycleError(Exception):
@@ -198,12 +199,16 @@ class MutationLock:
         return False
 
 
-def capability_receipt(skill_installed):
+def capability_receipt(skill_installed, runtime_ready=None, runtime_id=None, runtime_target=None):
+    if runtime_ready is None:
+        runtime_ready = skill_installed
     return {
         "skill_installed": skill_installed,
-        "keyword_runtime_ready": False,
-        "keyword_runtime_status": "blocked_missing_interpreter_and_locked_dependencies",
-        "keyword_runtime_error": KEYWORD_RUNTIME_ERROR,
+        "keyword_runtime_ready": bool(runtime_ready),
+        "keyword_runtime_status": "ready" if runtime_ready else "blocked_missing_interpreter_and_locked_dependencies",
+        "keyword_runtime_error": None if runtime_ready else KEYWORD_RUNTIME_ERROR,
+        "keyword_runtime_id": runtime_id,
+        "keyword_runtime_target": runtime_target,
         "vector_capability": "optional",
     }
 
@@ -220,10 +225,12 @@ def make_parser():
     plan = commands.add_parser("plan")
     plan.add_argument("--source", required=True, type=Path)
     plan.add_argument("--home", required=True, type=Path)
+    plan.add_argument("--runtime-source", required=True, type=Path)
     plan.add_argument("--include-ima", action="store_true")
     install = commands.add_parser("install")
     install.add_argument("--source", required=True, type=Path)
     install.add_argument("--home", required=True, type=Path)
+    install.add_argument("--runtime-source", required=True, type=Path)
     install.add_argument("--include-ima", action="store_true")
     install.add_argument("--allow-copy-fallback", action="store_true")
     install.add_argument("--link-mode", choices=("auto", "copy"), default="auto")
@@ -264,6 +271,7 @@ def inspect_source(args):
 
 def build_plan(args):
     source, version, skills = inspect_source(args)
+    runtime = inspect_runtime_source(args.runtime_source)
     owned_roots, runtime_aliases = detect_runtime_layout(args.home.absolute())
     plan = {
         "status": "ready",
@@ -271,8 +279,14 @@ def build_plan(args):
         "skills": skills,
         "include_ima": args.include_ima,
         "offline_baseline": "keyword",
-        **capability_receipt(False),
+        **capability_receipt(
+            False,
+            True,
+            runtime["runtime_id"],
+            runtime["target"],
+        ),
         "source": str(source),
+        "runtime": runtime,
         "home": str(args.home.absolute()),
         "runtime_aliases": runtime_aliases,
         "owned_roots": {owner: str(root) for owner, root in owned_roots.items()},
@@ -298,6 +312,102 @@ def inventory(root):
             continue
         files[relative] = {"sha256": sha256(path), "size": path.stat().st_size}
     return files
+
+
+def runtime_tree_sha256(records):
+    material = b"".join(
+        record["path"].encode("utf-8")
+        + b"\0"
+        + str(record["size"]).encode("ascii")
+        + b"\0"
+        + record["sha256"].encode("ascii")
+        + b"\n"
+        for record in sorted(records, key=lambda item: item["path"])
+    )
+    return hashlib.sha256(material).hexdigest()
+
+
+def inspect_runtime_source(path):
+    source = path.absolute()
+    descriptor_path = source / ".runtime-target.json"
+    if source.is_symlink() or not source.is_dir() or not descriptor_path.is_file():
+        raise LifecycleError("离线关键词运行时源缺少目标清单")
+    try:
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise LifecycleError("离线关键词运行时目标清单不可读") from error
+    if (
+        not isinstance(descriptor, dict)
+        or set(descriptor)
+        != {
+            "files",
+            "interpreter",
+            "runtime_id",
+            "schema_version",
+            "site_packages",
+            "target",
+            "tree_sha256",
+        }
+        or descriptor.get("schema_version") != 1
+        or descriptor.get("target") not in {"windows-x64", "macos-x64", "macos-arm64"}
+        or not isinstance(descriptor.get("runtime_id"), str)
+        or not isinstance(descriptor.get("interpreter"), str)
+        or not isinstance(descriptor.get("site_packages"), str)
+        or not isinstance(descriptor.get("files"), list)
+        or not re.fullmatch(r"[0-9a-f]{64}", str(descriptor.get("tree_sha256", "")))
+    ):
+        raise LifecycleError("离线关键词运行时目标清单合同无效")
+    expected = {}
+    seen = set()
+    for record in descriptor["files"]:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"mode", "path", "sha256", "size"}
+            or record.get("mode") not in {"100644", "100755"}
+            or not isinstance(record.get("path"), str)
+            or not record["path"]
+            or "\\" in record["path"]
+            or Path(record["path"]).is_absolute()
+            or ".." in Path(record["path"]).parts
+            or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))
+            or not isinstance(record.get("size"), int)
+            or record["size"] < 0
+        ):
+            raise LifecycleError("离线关键词运行时文件记录无效")
+        key = record["path"].casefold()
+        if key in seen:
+            raise LifecycleError("离线关键词运行时文件路径碰撞")
+        seen.add(key)
+        expected[record["path"]] = {
+            "sha256": record["sha256"],
+            "size": record["size"],
+        }
+    actual = inventory(source)
+    actual.pop(".runtime-target.json", None)
+    if actual != expected or runtime_tree_sha256(descriptor["files"]) != descriptor["tree_sha256"]:
+        raise LifecycleError("离线关键词运行时文件指纹漂移")
+    interpreter = source / Path(descriptor["interpreter"])
+    site_packages = source / Path(descriptor["site_packages"])
+    if not interpreter.is_file() or not site_packages.is_dir():
+        raise LifecycleError("离线关键词运行时解释器或依赖目录缺失")
+    return {
+        "source": str(source),
+        "runtime_id": descriptor["runtime_id"],
+        "target": descriptor["target"],
+        "interpreter": descriptor["interpreter"],
+        "site_packages": descriptor["site_packages"],
+        "tree_sha256": descriptor["tree_sha256"],
+        "descriptor_sha256": sha256(descriptor_path),
+        "inventory": inventory(source),
+    }
+
+
+def skill_inventory(root):
+    return {
+        path: value
+        for path, value in inventory(root).items()
+        if not path.startswith(f"{RUNTIME_DIRECTORY}/")
+    }
 
 
 def json_fingerprint(payload):
@@ -483,11 +593,22 @@ def assess_plan(plan, home):
     _, _, state = load_state(home)
     if state["owned_skills"] != plan["skills"]:
         raise LifecycleError("已有受管安装的 Skill 集合与候选不兼容")
-    plan.update(capability_receipt(True))
+    plan.update(
+        capability_receipt(
+            True,
+            True,
+            plan["runtime"]["runtime_id"],
+            plan["runtime"]["target"],
+        )
+    )
     plan["active_version"] = state["active_version"]
     if state["active_version"] == plan["version"]:
         current = package / "versions" / plan["version"]
-        if inventory(Path(plan["source"])) != inventory(current):
+        installed_runtime = inspect_runtime_source(current / RUNTIME_DIRECTORY)
+        if (
+            skill_inventory(Path(plan["source"])) != skill_inventory(current)
+            or installed_runtime["inventory"] != plan["runtime"]["inventory"]
+        ):
             raise LifecycleError("相同版本号对应不同文件，拒绝覆盖")
         plan["action"] = "already_installed"
         return plan
@@ -575,6 +696,7 @@ def remove_owned_entry(path, mode):
 
 def install(args):
     source, version, _ = inspect_source(args)
+    inspect_runtime_source(args.runtime_source)
     home = args.home.absolute()
     package = home / ".agents" / "packages" / PACKAGE_NAME
     ensure_windows_path_budget(source, package / "versions", version)
@@ -606,7 +728,13 @@ def install_locked(args, transaction_id):
             raise LifecycleError("升级不得隐式执行入口模式迁移")
         if previous_state["active_version"] == plan["version"]:
             current = package / "versions" / plan["version"]
-            if inventory(args.source.absolute()) != inventory(current):
+            current_runtime = current / RUNTIME_DIRECTORY
+            if (
+                skill_inventory(args.source.absolute()) != skill_inventory(current)
+                or not current_runtime.is_dir()
+                or inspect_runtime_source(current_runtime)["inventory"]
+                != plan["runtime"]["inventory"]
+            ):
                 raise LifecycleError("相同版本号对应不同文件，拒绝覆盖")
             if previous_state["schema_version"] == 1:
                 migrated_state = dict(previous_state)
@@ -630,7 +758,12 @@ def install_locked(args, transaction_id):
                     "version": plan["version"],
                     "skills": plan["skills"],
                     "state": str(state_path),
-                    **capability_receipt(True),
+                    **capability_receipt(
+                        True,
+                        True,
+                        plan["runtime"]["runtime_id"],
+                        plan["runtime"]["target"],
+                    ),
                 }
             after = managed_snapshot(home)
             undo_receipt = write_undo_receipt(
@@ -645,7 +778,12 @@ def install_locked(args, transaction_id):
                 "version": plan["version"],
                 "skills": plan["skills"],
                 "state": str(state_path),
-                **capability_receipt(True),
+                **capability_receipt(
+                    True,
+                    True,
+                    plan["runtime"]["runtime_id"],
+                    plan["runtime"]["target"],
+                ),
             }
     else:
         if version_root.exists():
@@ -661,6 +799,11 @@ def install_locked(args, transaction_id):
     try:
         staging.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(args.source.absolute(), staging, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
+        shutil.copytree(
+            args.runtime_source.absolute(),
+            staging / RUNTIME_DIRECTORY,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         manifest = {
             "schema_version": 1,
             "package": PACKAGE_NAME,
@@ -668,9 +811,12 @@ def install_locked(args, transaction_id):
             "skills": plan["skills"],
             "capabilities": {
                 "offline_baseline": "keyword",
-                "keyword_runtime_ready": False,
-                "keyword_runtime_status": "blocked_missing_interpreter_and_locked_dependencies",
-                "keyword_runtime_error": KEYWORD_RUNTIME_ERROR,
+                "keyword_runtime_ready": True,
+                "keyword_runtime_status": "ready",
+                "keyword_runtime_error": None,
+                "keyword_runtime_id": plan["runtime"]["runtime_id"],
+                "keyword_runtime_target": plan["runtime"]["target"],
+                "keyword_runtime_interpreter": plan["runtime"]["interpreter"],
                 "vector": "optional",
             },
             "files": inventory(staging),
@@ -728,6 +874,12 @@ def install_locked(args, transaction_id):
             "runtime_aliases": plan["runtime_aliases"],
             "owned_roots": plan["owned_roots"],
             "entries": entries,
+            "keyword_runtime": {
+                "runtime_id": plan["runtime"]["runtime_id"],
+                "target": plan["runtime"]["target"],
+                "interpreter": plan["runtime"]["interpreter"],
+                "tree_sha256": plan["runtime"]["tree_sha256"],
+            },
         }
         atomic_json(state_path, state)
         action = "upgrade" if previous_state else "install"
@@ -760,7 +912,12 @@ def install_locked(args, transaction_id):
         "version": plan["version"],
         "skills": plan["skills"],
         "state": str(state_path),
-        **capability_receipt(True),
+        **capability_receipt(
+            True,
+            True,
+            plan["runtime"]["runtime_id"],
+            plan["runtime"]["target"],
+        ),
     }
 
 
@@ -811,6 +968,27 @@ def verify(args):
         raise LifecycleError("安装清单与所有权状态不一致")
     if inventory(version_root) != manifest.get("files"):
         raise LifecycleError("活动版本文件指纹漂移")
+    capabilities = manifest.get("capabilities")
+    if not isinstance(capabilities, dict):
+        raise LifecycleError("活动版本缺少能力清单")
+    runtime_ready = capabilities.get("keyword_runtime_ready") is True
+    installed_runtime = None
+    if runtime_ready:
+        installed_runtime = inspect_runtime_source(version_root / RUNTIME_DIRECTORY)
+        expected_runtime = state.get("keyword_runtime")
+        if (
+            not isinstance(expected_runtime, dict)
+            or expected_runtime.get("runtime_id") != installed_runtime["runtime_id"]
+            or expected_runtime.get("target") != installed_runtime["target"]
+            or expected_runtime.get("interpreter") != installed_runtime["interpreter"]
+            or expected_runtime.get("tree_sha256") != installed_runtime["tree_sha256"]
+            or capabilities.get("keyword_runtime_id") != installed_runtime["runtime_id"]
+            or capabilities.get("keyword_runtime_target") != installed_runtime["target"]
+            or capabilities.get("keyword_runtime_interpreter") != installed_runtime["interpreter"]
+        ):
+            raise LifecycleError("活动版本离线运行时合同漂移")
+    elif (version_root / RUNTIME_DIRECTORY).exists():
+        raise LifecycleError("未就绪版本含未声明的离线运行时")
 
     roots, runtime_aliases = detect_runtime_layout(home)
     expected_owned_roots = {owner: str(root) for owner, root in roots.items()}
@@ -851,7 +1029,12 @@ def verify(args):
         "state": str(state_path),
         "state_schema_version": state["schema_version"],
         "offline_baseline": manifest["capabilities"]["offline_baseline"],
-        **capability_receipt(True),
+        **capability_receipt(
+            True,
+            runtime_ready,
+            installed_runtime["runtime_id"] if installed_runtime else None,
+            installed_runtime["target"] if installed_runtime else None,
+        ),
     }
 
 

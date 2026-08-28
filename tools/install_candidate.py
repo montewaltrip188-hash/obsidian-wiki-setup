@@ -9,7 +9,10 @@ import re
 import stat
 import subprocess
 import sys
+import tarfile
 import unicodedata
+import urllib.error
+import urllib.request
 import zipfile
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -44,6 +47,8 @@ INSTALLER_COMMON_REQUIRED = {
     "activation-public-key.xml",
     "contracts/deploy-manifest.schema.json",
     "contracts/install-candidate.schema.json",
+    "contracts/offline-keyword-runtime-bom.json",
+    "contracts/offline-keyword-runtime-bom.schema.json",
     "contracts/wiki-skill-lifecycle.json",
     "contracts/runtime-contract.schema.json",
     "contracts/compatibility.schema.json",
@@ -73,6 +78,7 @@ INSTALLER_COMMON_REQUIRED = {
     "tools/manage_wiki_skills.py",
     "tools/vault_update.py",
     "tools/joint_update.py",
+    "tools/verify_keyword_runtime.py",
     "release/bundle-release.json",
 }
 INSTALLER_PLATFORM_REQUIRED = {
@@ -97,8 +103,10 @@ INSTALLER_COMMON_PAYLOAD = {
     "tools/manage_wiki_skills.py",
     "tools/vault_update.py",
     "tools/joint_update.py",
+    "tools/verify_keyword_runtime.py",
     "release/bundle-release.json",
 }
+RUNTIME_BOM_PATH = "contracts/offline-keyword-runtime-bom.json"
 INSTALLER_PLATFORM_PAYLOAD = {
     "windows": {
         "change-model.bat",
@@ -332,7 +340,7 @@ def customer_path(record):
     raise CandidateError(f"未知候选来源：{source}")
 
 
-def make_customer_zip(staging: Path, records) -> bytes:
+def make_customer_zip(staging: Path, records, runtime_records=None) -> bytes:
     entries = [
         ("manifest.json", (staging / "manifest.json").read_bytes(), "100644"),
         (
@@ -366,6 +374,20 @@ def make_customer_zip(staging: Path, records) -> bytes:
             )
         )
     entries.extend(sorted(customer_files, key=lambda item: item[0]))
+    for record in runtime_records or []:
+        relative = record["path"]
+        validate_relative_path(relative)
+        key = collision_key(relative)
+        if key in seen:
+            raise CandidateError(f"客户候选含运行时路径碰撞：{relative}")
+        seen.add(key)
+        entries.append(
+            (
+                relative,
+                (staging / Path(relative)).read_bytes(),
+                record["mode"],
+            )
+        )
     return make_zip_bytes(entries)
 
 
@@ -377,6 +399,350 @@ def json_contract(content: bytes, label: str) -> dict:
     if not isinstance(value, dict):
         raise CandidateError(f"{label} 必须是 JSON 对象")
     return value
+
+
+def asset_bytes(asset: dict, installer_source: dict, cache: Path) -> bytes:
+    if not isinstance(asset, dict):
+        raise CandidateError("离线运行时资产合同无效")
+    filename = asset.get("filename")
+    expected_sha = str(asset.get("sha256", ""))
+    expected_size = asset.get("size")
+    if (
+        not isinstance(filename, str)
+        or PurePosixPath(filename).name != filename
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
+        or not isinstance(expected_size, int)
+        or expected_size < 0
+    ):
+        raise CandidateError("离线运行时资产元数据无效")
+    repo_path = asset.get("repo_path")
+    url = asset.get("url")
+    if bool(repo_path) == bool(url):
+        raise CandidateError("离线运行时资产必须二选一绑定 repo_path 或 HTTPS URL")
+    if repo_path:
+        validate_relative_path(repo_path)
+        try:
+            content = git_bytes(
+                Path(installer_source["repo"]),
+                "show",
+                f"{installer_source['commit']}:{repo_path}",
+            )
+        except CandidateError as exc:
+            raise CandidateError(f"离线运行时仓库资产不可读：{filename}") from exc
+    else:
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise CandidateError("离线运行时外部资产必须使用 HTTPS")
+        cache.mkdir(parents=True, exist_ok=True)
+        cached = cache / filename
+        if cached.exists():
+            if not cached.is_file() or cached.is_symlink():
+                raise CandidateError(f"离线运行时缓存路径无效：{filename}")
+            content = cached.read_bytes()
+        else:
+            partial = cache / f".{filename}.partial"
+            if partial.exists():
+                raise CandidateError(f"离线运行时缓存存在未完成下载：{filename}")
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": "obsidian-wiki-setup-runtime-builder/1"},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    content = response.read()
+                partial.write_bytes(content)
+                partial.replace(cached)
+            except (OSError, urllib.error.URLError) as exc:
+                if partial.exists():
+                    partial.unlink()
+                raise CandidateError(f"离线运行时资产下载失败：{filename}") from exc
+    if len(content) != expected_size:
+        raise CandidateError(f"离线运行时资产大小不匹配：{filename}")
+    if hashlib.sha256(content).hexdigest() != expected_sha:
+        raise CandidateError(f"离线运行时资产 SHA-256 不匹配：{filename}")
+    return content
+
+
+def normalized_link_target(member_name: str, link_name: str) -> str:
+    if PurePosixPath(link_name).is_absolute():
+        raise CandidateError(f"运行时归档含绝对链接：{member_name}")
+    parts = []
+    for part in (PurePosixPath(member_name).parent / link_name).parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                raise CandidateError(f"运行时归档链接越界：{member_name}")
+            parts.pop()
+        else:
+            parts.append(part)
+    target = "/".join(parts)
+    validate_relative_path(target)
+    return target
+
+
+def tar_file_entries(content: bytes, label: str):
+    try:
+        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as archive:
+            members = {member.name: member for member in archive.getmembers()}
+
+            def resolve(member, seen):
+                if member.name in seen:
+                    raise CandidateError(f"{label} 含循环链接：{member.name}")
+                if member.isfile():
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise CandidateError(f"{label} 文件不可读：{member.name}")
+                    return stream.read(), member.mode
+                if member.issym() or member.islnk():
+                    target_name = normalized_link_target(member.name, member.linkname)
+                    target = members.get(target_name)
+                    if target is None:
+                        raise CandidateError(f"{label} 链接目标缺失：{member.name}")
+                    return resolve(target, {*seen, member.name})
+                raise CandidateError(f"{label} 含不支持的归档条目：{member.name}")
+
+            entries = []
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                validate_relative_path(member.name)
+                data, source_mode = resolve(member, set())
+                mode = "100755" if source_mode & 0o111 else "100644"
+                entries.append((member.name, mode, data))
+            return entries
+    except (tarfile.TarError, OSError) as exc:
+        raise CandidateError(f"{label} 不是有效的 tar.gz") from exc
+
+
+def wheel_file_entries(content: bytes, label: str):
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            entries = []
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                validate_relative_path(info.filename)
+                if ".data/" in info.filename:
+                    raise CandidateError(f"{label} 含不支持的 wheel .data 条目")
+                file_type = (info.external_attr >> 16) & 0o170000
+                if file_type == stat.S_IFLNK:
+                    raise CandidateError(f"{label} 含链接条目：{info.filename}")
+                permissions = (info.external_attr >> 16) & 0o777
+                mode = "100755" if permissions & 0o111 else "100644"
+                entries.append((info.filename, mode, archive.read(info)))
+            return entries
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise CandidateError(f"{label} 不是有效 wheel") from exc
+
+
+def runtime_file_record(path: str, mode: str, content: bytes) -> dict:
+    return {
+        "mode": mode,
+        "path": path,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "size": len(content),
+    }
+
+
+def runtime_tree_sha256(records: list[dict]) -> str:
+    material = b"".join(
+        record["path"].encode("utf-8")
+        + b"\0"
+        + str(record["size"]).encode("ascii")
+        + b"\0"
+        + record["sha256"].encode("ascii")
+        + b"\n"
+        for record in sorted(records, key=lambda item: item["path"])
+    )
+    return hashlib.sha256(material).hexdigest()
+
+
+def package_asset(package: dict, target_name: str) -> dict:
+    mode = package.get("install_mode")
+    if mode == "wheel":
+        return package.get("asset")
+    if mode == "wheel_by_target":
+        assets = package.get("assets")
+        if not isinstance(assets, dict):
+            raise CandidateError("平台 wheel 合同无效")
+        return assets.get(target_name)
+    raise CandidateError("非 wheel 包不能通过 package_asset 解析")
+
+
+def build_runtime_payload(
+    bom_content: bytes,
+    installer_source: dict,
+    platform: str,
+    cache: Path,
+):
+    bom = json_contract(bom_content, "离线关键词运行时 BOM")
+    if (
+        bom.get("schema_version") != 1
+        or bom.get("archive_flavor") != "install_only"
+        or bom.get("policy")
+        != {
+            "client_network_install": False,
+            "modify_customer_content": False,
+            "modify_system_python": False,
+            "require_asset_sha256": True,
+            "require_licenses": True,
+            "require_sbom": True,
+        }
+    ):
+        raise CandidateError("离线关键词运行时 BOM 策略无效")
+    targets = bom.get("targets")
+    packages = bom.get("packages")
+    if not isinstance(targets, dict) or not isinstance(packages, dict):
+        raise CandidateError("离线关键词运行时 BOM 缺少目标或依赖")
+    selected = sorted(
+        name for name, target in targets.items()
+        if isinstance(target, dict) and target.get("platform") == platform
+    )
+    expected_targets = ["windows-x64"] if platform == "windows" else ["macos-arm64", "macos-x64"]
+    if selected != expected_targets:
+        raise CandidateError("离线关键词运行时平台目标不完整")
+
+    all_entries = []
+    target_receipts = {}
+    for target_name in selected:
+        target = targets[target_name]
+        root = f"runtime/targets/{target_name}"
+        runtime_archive = asset_bytes(target.get("asset"), installer_source, cache)
+        runtime_entries = tar_file_entries(runtime_archive, f"{target_name} Python 运行时")
+        if not any(PurePosixPath(path).name.startswith("LICENSE") for path, _, _ in runtime_entries):
+            raise CandidateError(f"{target_name} Python 运行时缺少许可证")
+        target_entries = [
+            (f"{root}/{path}", mode, content)
+            for path, mode, content in runtime_entries
+        ]
+        site_packages = target.get("site_packages")
+        interpreter = target.get("interpreter")
+        if not isinstance(site_packages, str) or not isinstance(interpreter, str):
+            raise CandidateError(f"{target_name} 运行时路径合同无效")
+        validate_relative_path(site_packages)
+        validate_relative_path(interpreter)
+
+        for package_name, package in sorted(packages.items()):
+            if not isinstance(package, dict):
+                raise CandidateError(f"依赖合同无效：{package_name}")
+            install_mode = package.get("install_mode")
+            if install_mode in {"wheel", "wheel_by_target"}:
+                asset = package_asset(package, target_name)
+                wheel = asset_bytes(asset, installer_source, cache)
+                extracted = wheel_file_entries(wheel, f"{package_name} wheel")
+                if not any(
+                    "/licenses/" in f"/{path.casefold()}" or PurePosixPath(path).name.casefold().startswith("license")
+                    for path, _, _ in extracted
+                ):
+                    raise CandidateError(f"依赖 wheel 缺少许可证：{package_name}")
+                target_entries.extend(
+                    (f"{root}/{site_packages}/{path}", mode, content)
+                    for path, mode, content in extracted
+                )
+            elif install_mode == "sdist_vendored":
+                source = asset_bytes(package.get("asset"), installer_source, cache)
+                prefix = package.get("source_prefix")
+                if not isinstance(prefix, str) or not prefix.endswith("/"):
+                    raise CandidateError(f"vendored 依赖前缀无效：{package_name}")
+                vendored = []
+                for path, mode, content in tar_file_entries(source, f"{package_name} sdist"):
+                    if path.startswith(prefix):
+                        relative = path[len(prefix):]
+                        if relative:
+                            vendored.append(
+                                (f"{root}/{site_packages}/{package_name}/{relative}", mode, content)
+                            )
+                if not vendored:
+                    raise CandidateError(f"vendored 依赖源码缺失：{package_name}")
+                license_content = asset_bytes(package.get("license_asset"), installer_source, cache)
+                version = package.get("version")
+                dist_info = f"{root}/{site_packages}/{package_name}-{version}.dist-info"
+                target_entries.extend(vendored)
+                target_entries.extend(
+                    [
+                        (f"{dist_info}/licenses/LICENSE", "100644", license_content),
+                        (
+                            f"{dist_info}/METADATA",
+                            "100644",
+                            f"Metadata-Version: 2.1\nName: {package_name}\nVersion: {version}\nLicense: {package.get('license')}\n".encode("utf-8"),
+                        ),
+                    ]
+                )
+            else:
+                raise CandidateError(f"未知依赖安装模式：{package_name}")
+
+        seen = set()
+        for path, _, _ in target_entries:
+            validate_relative_path(path)
+            key = collision_key(path)
+            if key in seen:
+                raise CandidateError(f"离线运行时文件碰撞：{path}")
+            seen.add(key)
+        records_before_descriptor = [
+            runtime_file_record(path[len(root) + 1:], mode, content)
+            for path, mode, content in sorted(target_entries, key=lambda item: item[0])
+        ]
+        interpreter_path = interpreter
+        if interpreter_path not in {record["path"] for record in records_before_descriptor}:
+            raise CandidateError(f"离线运行时解释器缺失：{target_name}")
+        descriptor = {
+            "files": records_before_descriptor,
+            "interpreter": interpreter,
+            "runtime_id": bom.get("runtime_id"),
+            "schema_version": 1,
+            "site_packages": site_packages,
+            "target": target_name,
+            "tree_sha256": runtime_tree_sha256(records_before_descriptor),
+        }
+        descriptor_content = pretty_json_bytes(descriptor)
+        descriptor_path = f"{root}/.runtime-target.json"
+        target_entries.append((descriptor_path, "100644", descriptor_content))
+        all_entries.extend(target_entries)
+        target_receipts[target_name] = {
+            "descriptor_sha256": hashlib.sha256(descriptor_content).hexdigest(),
+            "interpreter": interpreter,
+            "target_root": root,
+            "tree_sha256": descriptor["tree_sha256"],
+        }
+
+    bom_sha256 = hashlib.sha256(bom_content).hexdigest()
+    sbom = {
+        "bom": bom,
+        "bom_sha256": bom_sha256,
+        "schema_version": 1,
+        "selected_targets": selected,
+    }
+    notices = [
+        "# 第三方组件与许可证",
+        "",
+        f"- Python runtime: {bom.get('runtime_id')}（归档内保留 Python 及其依赖许可证）",
+    ]
+    for name, package in sorted(packages.items()):
+        notices.append(f"- {name} {package.get('version')}: {package.get('license')}")
+    notices.extend(["", "各目标的许可证文件保留在 Python 目录和 site-packages 的 licenses 目录中。", ""])
+    install_manifest = {
+        "bom_sha256": bom_sha256,
+        "runtime_id": bom.get("runtime_id"),
+        "schema_version": 1,
+        "targets": target_receipts,
+    }
+    shared = [
+        ("runtime/SBOM.json", "100644", pretty_json_bytes(sbom)),
+        ("runtime/THIRD-PARTY-NOTICES.md", "100644", "\n".join(notices).encode("utf-8")),
+        ("runtime/runtime-install-manifest.json", "100644", pretty_json_bytes(install_manifest)),
+    ]
+    all_entries.extend(shared)
+    records = [
+        runtime_file_record(path, mode, content)
+        for path, mode, content in sorted(all_entries, key=lambda item: item[0])
+    ]
+    identity = {
+        "bom_sha256": bom_sha256,
+        "files": records,
+        "runtime_id": bom.get("runtime_id"),
+        "targets": target_receipts,
+    }
+    return all_entries, identity
 
 
 def build_bundle_manifest(candidate_id: str, sources: dict, content_by_source: dict) -> dict:
@@ -518,6 +884,21 @@ def command_build(args):
             collected, key=lambda item: item[2]
         )
     ]
+    content_by_source = {
+        (source_name, source_path): content
+        for source_name, source_path, _, _, content in collected
+    }
+    runtime_cache = (
+        Path(args.runtime_cache).expanduser().resolve()
+        if args.runtime_cache
+        else staging.parent / "runtime-cache"
+    )
+    runtime_entries, runtime_identity = build_runtime_payload(
+        content_by_source[("installer", RUNTIME_BOM_PATH)],
+        plan["sources"]["installer"],
+        plan["platform"],
+        runtime_cache,
+    )
     identity = {
         "default_skills": [
             "design-juan-wiki",
@@ -528,21 +909,24 @@ def command_build(args):
         "offline_query_baseline": "keyword",
         "optional_skills": ["ima-skill"],
         "platform": plan["platform"],
+        "runtime": runtime_identity,
         "schema_version": 1,
         "sources": sources,
     }
     manifest = dict(identity)
     manifest["candidate_id"] = hashlib.sha256(canonical_json(identity)).hexdigest()
-    content_by_source = {
-        (source_name, source_path): content
-        for source_name, source_path, _, _, content in collected
-    }
     bundle_manifest = build_bundle_manifest(
         manifest["candidate_id"], sources, content_by_source
     )
 
     staging.mkdir(parents=True)
     for _, _, destination, mode, content in collected:
+        target = staging / Path(destination)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        if mode == "100755":
+            target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    for destination, mode, content in runtime_entries:
         target = staging / Path(destination)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
@@ -558,7 +942,9 @@ def command_build(args):
     vault_archive, deploy_manifest = make_deploy_artifacts(product_files)
     (staging / "vault.zip").write_bytes(vault_archive)
     write_json(staging / "deploy-manifest.json", deploy_manifest)
-    (staging / "candidate.zip").write_bytes(make_customer_zip(staging, records))
+    (staging / "candidate.zip").write_bytes(
+        make_customer_zip(staging, records, runtime_identity["files"])
+    )
 
 
 def command_verify(args):
@@ -579,6 +965,7 @@ def command_verify(args):
         "offline_query_baseline",
         "optional_skills",
         "platform",
+        "runtime",
         "schema_version",
         "sources",
     }
@@ -671,6 +1058,49 @@ def command_verify(args):
             actual_paths.add(path.relative_to(staging).as_posix())
     if actual_paths != expected_paths:
         raise CandidateError("payload 文件集合与 manifest.json 不一致")
+    runtime = manifest.get("runtime")
+    if (
+        not isinstance(runtime, dict)
+        or set(runtime) != {"bom_sha256", "files", "runtime_id", "targets"}
+        or not re.fullmatch(r"[0-9a-f]{64}", str(runtime.get("bom_sha256", "")))
+        or not isinstance(runtime.get("runtime_id"), str)
+        or not isinstance(runtime.get("targets"), dict)
+        or not isinstance(runtime.get("files"), list)
+    ):
+        raise CandidateError("manifest.json 的离线运行时合同无效")
+    runtime_paths = set()
+    runtime_keys = set()
+    for record in runtime["files"]:
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"mode", "path", "sha256", "size"}
+            or record.get("mode") not in ("100644", "100755")
+            or not isinstance(record.get("path"), str)
+            or not record["path"].startswith("runtime/")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))
+            or not isinstance(record.get("size"), int)
+            or record["size"] < 0
+        ):
+            raise CandidateError("manifest.json 含无效运行时文件记录")
+        validate_relative_path(record["path"])
+        key = collision_key(record["path"])
+        if key in runtime_keys:
+            raise CandidateError(f"manifest.json 含运行时路径碰撞：{record['path']}")
+        runtime_keys.add(key)
+        runtime_paths.add(record["path"])
+        path = staging / Path(record["path"])
+        if path.is_symlink() or not path.is_file():
+            raise CandidateError(f"离线运行时文件缺失或为链接：{record['path']}")
+        content = path.read_bytes()
+        if len(content) != record["size"] or hashlib.sha256(content).hexdigest() != record["sha256"]:
+            raise CandidateError(f"离线运行时文件 SHA-256 不匹配：{record['path']}")
+    actual_runtime_paths = {
+        path.relative_to(staging).as_posix()
+        for path in (staging / "runtime").rglob("*")
+        if path.is_file()
+    }
+    if actual_runtime_paths != runtime_paths:
+        raise CandidateError("runtime 文件集合与 manifest.json 不一致")
     expected_vault_archive, expected_deploy = make_deploy_artifacts(product_files)
     try:
         actual_vault_archive = (staging / "vault.zip").read_bytes()
@@ -700,7 +1130,7 @@ def command_verify(args):
         raise CandidateError("bundle-manifest.json 与三仓来源不一致")
     if bundle_bytes != pretty_json_bytes(expected_bundle):
         raise CandidateError("bundle-manifest.json 不是规范化 JSON")
-    expected_archive = make_customer_zip(staging, records)
+    expected_archive = make_customer_zip(staging, records, runtime["files"])
     try:
         actual_archive = archive_path.read_bytes()
     except OSError as exc:
@@ -739,6 +1169,7 @@ def parser():
     build = commands.add_parser("build", help="从 Git 对象构建全新安装候选")
     build.add_argument("--plan", required=True)
     build.add_argument("--staging", required=True)
+    build.add_argument("--runtime-cache")
     build.set_defaults(handler=command_build)
     verify = commands.add_parser("verify", help="验证候选的清单、文件与确定性压缩包")
     verify.add_argument("--staging", required=True)

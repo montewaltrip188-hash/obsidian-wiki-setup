@@ -96,6 +96,51 @@ print('RECEIPT_JSON: ' + json.dumps(receipt, ensure_ascii=False, sort_keys=True)
     return root
 
 
+def make_runtime_source(root: Path, runtime_id: str) -> Path:
+    files = {
+        "python/python.exe": b"fixture isolated python\n",
+        "python/Lib/site-packages/jieba/__init__.py": b"__version__ = '0.42.1'\n",
+        "python/Lib/site-packages/numpy/__init__.py": b"__version__ = '2.5.2'\n",
+        "python/Lib/site-packages/requests/__init__.py": b"__version__ = '2.34.2'\n",
+    }
+    records = []
+    for relative, content in sorted(files.items()):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        records.append(
+            {
+                "mode": "100644",
+                "path": relative,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+            }
+        )
+    material = b"".join(
+        record["path"].encode("utf-8")
+        + b"\0"
+        + str(record["size"]).encode("ascii")
+        + b"\0"
+        + record["sha256"].encode("ascii")
+        + b"\n"
+        for record in records
+    )
+    descriptor = {
+        "files": records,
+        "interpreter": "python/python.exe",
+        "runtime_id": runtime_id,
+        "schema_version": 1,
+        "site_packages": "python/Lib/site-packages",
+        "target": "windows-x64",
+        "tree_sha256": hashlib.sha256(material).hexdigest(),
+    }
+    (root / ".runtime-target.json").write_text(
+        json.dumps(descriptor, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return root
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -135,9 +180,12 @@ class JointUpdatePlanTests(unittest.TestCase):
 
             old_source = make_skill_source(root / "old-skill", "2.0.1", "1" * 64)
             target_source = make_skill_source(root / "target-skill", "2.1.0", "2" * 64)
+            old_runtime = make_runtime_source(root / "old-runtime", "fixture-old")
+            target_runtime = make_runtime_source(root / "target-runtime", "fixture-target")
             run_json(
                 SKILL_CLI,
                 "install", "--source", old_source, "--home", home,
+                "--runtime-source", old_runtime,
                 "--link-mode", "copy", "--allow-copy-fallback",
             )
 
@@ -155,6 +203,7 @@ class JointUpdatePlanTests(unittest.TestCase):
                 "--skill-compatibility", compatibility,
                 "--bundle-manifest", target_bundle,
                 "--skill-source", target_source,
+                "--runtime-source", target_runtime,
                 "--home", home,
                 "--query", "联合事务",
                 "--expect-path", "wiki/concepts/联合事务.md",
@@ -202,6 +251,7 @@ class JointUpdatePlanTests(unittest.TestCase):
                 "--skill-compatibility", compatibility,
                 "--bundle-manifest", target_bundle,
                 "--skill-source", target_source,
+                "--runtime-source", target_runtime,
                 "--home", home,
                 "--query", "联合事务",
                 "--expect-path", "wiki/concepts/联合事务.md",
@@ -251,9 +301,12 @@ class JointUpdatePlanTests(unittest.TestCase):
 
             old_source = make_skill_source(root / "old-skill", "2.0.1", "1" * 64)
             target_source = make_skill_source(root / "target-skill", "2.1.0", "2" * 64)
+            old_runtime = make_runtime_source(root / "old-runtime", "fixture-old")
+            target_runtime = make_runtime_source(root / "target-runtime", "fixture-target")
             run_json(
                 SKILL_CLI,
                 "install", "--source", old_source, "--home", home,
+                "--runtime-source", old_runtime,
                 "--link-mode", "copy", "--allow-copy-fallback",
             )
 
@@ -266,6 +319,7 @@ class JointUpdatePlanTests(unittest.TestCase):
                 "--skill-compatibility", compatibility,
                 "--bundle-manifest", target_bundle,
                 "--skill-source", target_source,
+                "--runtime-source", target_runtime,
                 "--home", home,
                 "--query", "联合事务",
                 "--expect-path", "wiki/concepts/联合事务.md",
@@ -384,9 +438,12 @@ class JointUpdatePlanTests(unittest.TestCase):
             )
             old_source = make_skill_source(root / "old-skill", "2.0.1", "1" * 64)
             target_source = make_skill_source(root / "target-skill", "2.1.0", "2" * 64)
+            old_runtime = make_runtime_source(root / "old-runtime", "fixture-old")
+            target_runtime = make_runtime_source(root / "target-runtime", "fixture-target")
             run_json(
                 SKILL_CLI,
                 "install", "--source", old_source, "--home", home,
+                "--runtime-source", old_runtime,
                 "--link-mode", "copy", "--allow-copy-fallback",
             )
             common = (
@@ -398,6 +455,7 @@ class JointUpdatePlanTests(unittest.TestCase):
                 "--skill-compatibility", compatibility,
                 "--bundle-manifest", target_bundle,
                 "--skill-source", target_source,
+                "--runtime-source", target_runtime,
                 "--home", home,
                 "--query", "不会命中",
                 "--expect-path", "wiki/concepts/不会命中.md",

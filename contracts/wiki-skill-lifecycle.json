@@ -19,9 +19,15 @@
     ],
     "ima_skill": "explicit_opt_in",
     "offline_baseline": "keyword",
-    "keyword_runtime_ready": false,
-    "keyword_runtime_status": "blocked_missing_interpreter_and_locked_dependencies",
-    "keyword_runtime_error": "KEYWORD_RUNTIME_UNPROVISIONED",
+    "keyword_runtime_ready": true,
+    "keyword_runtime_status": "ready",
+    "keyword_runtime_error": null,
+    "keyword_runtime_id": "cpython-3.12.14+20260825",
+    "keyword_runtime_targets": [
+      "windows-x64",
+      "macos-x64",
+      "macos-arm64"
+    ],
     "vector_capability": "optional",
     "link_mode": "auto",
     "copy_fallback": "explicit_opt_in"
@@ -97,6 +103,9 @@
   },
   "dependency_policy": {
     "automatic_network_install": false,
+    "client_package_install": "forbidden",
+    "system_python_modification": "forbidden",
+    "bom": "contracts/offline-keyword-runtime-bom.json",
     "ready_requires": [
       "isolated_interpreter",
       "locked_dependency_bundle",

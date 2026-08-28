@@ -36,7 +36,7 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def make_three_repositories(root: Path):
+def make_three_repositories(root: Path, *, runtime_ready: bool = False):
     skill_files = {
         "VERSION": "2.1.0\n",
         "core/design-juan-wiki/SKILL.md": "design\n",
@@ -94,18 +94,30 @@ def make_three_repositories(root: Path):
     release = json.loads(installer_files["release/bundle-release.json"])
     release["wiki_skills_version"] = "2.1.0"
     installer_files["release/bundle-release.json"] = json.dumps(release) + "\n"
+    runtime_bom = json.loads(installer_files["contracts/offline-keyword-runtime-bom.json"])
+    lifecycle_defaults = {
+        "offline_baseline": "keyword",
+        "keyword_runtime_ready": runtime_ready,
+        "keyword_runtime_status": "ready" if runtime_ready else "blocked_missing_interpreter_and_locked_dependencies",
+        "keyword_runtime_error": None if runtime_ready else "KEYWORD_RUNTIME_UNPROVISIONED",
+    }
+    if runtime_ready:
+        lifecycle_defaults.update(
+            {
+                "keyword_runtime_id": runtime_bom["runtime_id"],
+                "keyword_runtime_targets": list(runtime_bom["targets"]),
+            }
+        )
     installer_files["contracts/wiki-skill-lifecycle.json"] = json.dumps(
         {
             "schema_version": 2,
             "component": "claudecode-wiki-skills",
-            "defaults": {
-                "offline_baseline": "keyword",
-                "keyword_runtime_ready": False,
-                "keyword_runtime_status": "blocked_missing_interpreter_and_locked_dependencies",
-                "keyword_runtime_error": "KEYWORD_RUNTIME_UNPROVISIONED",
-            },
+            "defaults": lifecycle_defaults,
             "dependency_policy": {
                 "automatic_network_install": False,
+                "client_package_install": "forbidden",
+                "system_python_modification": "forbidden",
+                "bom": "contracts/offline-keyword-runtime-bom.json",
                 "ready_requires": [
                     "isolated_interpreter",
                     "locked_dependency_bundle",
@@ -125,6 +137,28 @@ def make_three_repositories(root: Path):
 
 
 class ReleaseOrchestratorTests(unittest.TestCase):
+    def test_ready_runtime_gate_advances_only_to_version_approval(self):
+        with tempfile.TemporaryDirectory(prefix="d2-orchestrator-ready-") as temporary:
+            root = Path(temporary)
+            repositories = make_three_repositories(root, runtime_ready=True)
+            planned = run_cli(
+                "plan",
+                "--product-repo", repositories["product"][0],
+                "--product-ref", repositories["product"][1],
+                "--skill-repo", repositories["skill"][0],
+                "--skill-ref", repositories["skill"][1],
+                "--installer-repo", repositories["installer"][0],
+                "--installer-ref", repositories["installer"][1],
+                "--workspace", root / "workspace",
+            )
+            gate = planned["release_gates"]["keyword_runtime"]
+            self.assertEqual("version_approval_required", planned["next_action"])
+            self.assertEqual("ready", gate["status"])
+            self.assertEqual("fixture-python-3.12", gate["runtime_id"])
+            self.assertEqual(
+                ["windows-x64", "macos-x64", "macos-arm64"], gate["targets"]
+            )
+
     def test_plan_freezes_fresh_clones_and_reproducible_two_platform_candidates(self):
         with tempfile.TemporaryDirectory(prefix="d2-orchestrator-") as temporary:
             root = Path(temporary)

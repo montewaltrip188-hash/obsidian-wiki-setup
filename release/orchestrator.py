@@ -237,12 +237,35 @@ def plan_release(args: argparse.Namespace) -> dict:
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise OrchestratorError("WIKI_SKILL_LIFECYCLE_CONTRACT_INVALID") from exc
     keyword_runtime_ready = defaults.get("keyword_runtime_ready") is True
+    runtime_id = defaults.get("keyword_runtime_id")
+    runtime_targets = defaults.get("keyword_runtime_targets")
+    if keyword_runtime_ready:
+        bom_path = Path(clones["installer"]["clone"]) / "contracts" / "offline-keyword-runtime-bom.json"
+        try:
+            bom = json.loads(bom_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise OrchestratorError("OFFLINE_RUNTIME_BOM_INVALID") from exc
+        if (
+            defaults.get("keyword_runtime_status") != "ready"
+            or defaults.get("keyword_runtime_error") is not None
+            or runtime_id != bom.get("runtime_id")
+            or not isinstance(runtime_targets, list)
+            or len(runtime_targets) != len(set(runtime_targets))
+            or set(runtime_targets) != set(bom.get("targets", {}).keys())
+            or dependency_policy.get("automatic_network_install") is not False
+            or dependency_policy.get("client_package_install") != "forbidden"
+            or dependency_policy.get("system_python_modification") != "forbidden"
+            or dependency_policy.get("bom") != "contracts/offline-keyword-runtime-bom.json"
+        ):
+            raise OrchestratorError("OFFLINE_RUNTIME_GATE_MISMATCH")
     release_gates = {
         "keyword_runtime": {
             "automatic_network_install": dependency_policy.get("automatic_network_install"),
             "error": defaults.get("keyword_runtime_error"),
             "offline_baseline": defaults.get("offline_baseline"),
             "ready_requires": dependency_policy.get("ready_requires"),
+            "runtime_id": runtime_id,
+            "targets": runtime_targets,
             "status": "ready" if keyword_runtime_ready else "blocked",
         }
     }

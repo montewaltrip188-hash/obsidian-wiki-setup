@@ -501,9 +501,33 @@ class SafeDeployTests(unittest.TestCase):
             self.assertRegex(content, r"\bverify\b", label)
             self.assertRegex(content, r"\bundo\b", label)
             self.assertIn("--receipt", content, label)
+            self.assertIn("--runtime-source", content, label)
+            self.assertIn("verify_keyword_runtime.py", content, label)
+            self.assertIn("--runtime-python", content, label)
+            self.assertIn("--query-script", content, label)
             self.assertNotIn("--include-ima", content, label)
+
+        self.assertIn("runtime\\targets\\windows-x64", windows)
+        self.assertIn("python\\python.exe", windows)
+        self.assertNotIn("Get-Command python", windows)
+        self.assertIn("runtime/targets/macos-arm64", mac)
+        self.assertIn("runtime/targets/macos-x64", mac)
+        self.assertIn("python/bin/python3", mac)
+        self.assertNotIn('KEYWORD_RUNTIME_UNPROVISIONED', mac)
         self.assertLess(windows.index("$skillManager install"), windows.index('$vaultDeployer, "deploy"'))
         self.assertLess(mac.index('"$SKILL_MANAGER" install'), mac.index('"$VAULT_DEPLOYER" deploy'))
+
+    def test_customer_lifecycle_wrappers_use_packaged_runtime(self) -> None:
+        for name in ("manage-wiki-skills.ps1", "vault-update.ps1", "joint-update.ps1"):
+            text = (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+            self.assertIn("runtime\\targets\\windows-x64\\python\\python.exe", text, name)
+            self.assertNotIn("Get-Command python", text, name)
+        for name in ("manage-wiki-skills.sh", "vault-update.sh", "joint-update.sh"):
+            text = (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+            self.assertIn("runtime/targets/macos-arm64", text, name)
+            self.assertIn("runtime/targets/macos-x64", text, name)
+            self.assertIn("python/bin/python3", text, name)
+            self.assertNotIn("exec python3", text, name)
 
     def test_declining_existing_vault_upgrade_exits_without_claiming_completion(self) -> None:
         windows = (REPO_ROOT / "setup-win.ps1").read_text(encoding="utf-8")

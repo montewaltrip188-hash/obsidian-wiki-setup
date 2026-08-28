@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/offline-keyword-runtime-bom.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["archive_flavor", "locked_versions", "packages", "policy", "provider", "provider_release", "python_version", "runtime_id", "schema_version", "targets"],
+  "properties": {
+    "archive_flavor": {"const": "install_only"},
+    "locked_versions": {"type": "object"},
+    "packages": {"type": "object"},
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_network_install", "modify_customer_content", "modify_system_python", "require_asset_sha256", "require_licenses", "require_sbom"],
+      "properties": {
+        "client_network_install": {"const": false},
+        "modify_customer_content": {"const": false},
+        "modify_system_python": {"const": false},
+        "require_asset_sha256": {"const": true},
+        "require_licenses": {"const": true},
+        "require_sbom": {"const": true}
+      }
+    },
+    "provider": {"const": "astral-sh/python-build-standalone"},
+    "provider_release": {"const": "20260825"},
+    "python_version": {"const": "3.12.14"},
+    "runtime_id": {"const": "cpython-3.12.14+20260825"},
+    "schema_version": {"const": 1},
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windows-x64", "macos-x64", "macos-arm64"],
+      "properties": {
+        "windows-x64": {"type": "object"},
+        "macos-x64": {"type": "object"},
+        "macos-arm64": {"type": "object"}
+      }
+    }
+  }
+}

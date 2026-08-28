@@ -1,0 +1,177 @@
+{
+  "archive_flavor": "install_only",
+  "locked_versions": {
+    "certifi": "2026.7.22",
+    "charset-normalizer": "3.5.1",
+    "idna": "3.19",
+    "jieba": "0.42.1",
+    "numpy": "2.5.2",
+    "requests": "2.34.2",
+    "urllib3": "2.7.0"
+  },
+  "packages": {
+    "certifi": {
+      "asset": {
+        "filename": "certifi-2026.7.22-py3-none-any.whl",
+        "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+        "size": 136983,
+        "url": "https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl"
+      },
+      "install_mode": "wheel",
+      "license": "MPL-2.0",
+      "version": "2026.7.22"
+    },
+    "charset-normalizer": {
+      "assets": {
+        "macos-arm64": {
+          "filename": "charset_normalizer-3.5.1-cp312-cp312-macosx_10_13_universal2.whl",
+          "sha256": "5b6d1386bf0096d26d3a863dc0a487a5b4eb9aa93cf5ba69683d29dde6b9d60f",
+          "size": 344456,
+          "url": "https://files.pythonhosted.org/packages/30/27/78873dc8b6a56357517b74b6bb9568b80450e7bb4f6ef7e3fa9d22aa0bd7/charset_normalizer-3.5.1-cp312-cp312-macosx_10_13_universal2.whl"
+        },
+        "macos-x64": {
+          "filename": "charset_normalizer-3.5.1-cp312-cp312-macosx_10_13_universal2.whl",
+          "sha256": "5b6d1386bf0096d26d3a863dc0a487a5b4eb9aa93cf5ba69683d29dde6b9d60f",
+          "size": 344456,
+          "url": "https://files.pythonhosted.org/packages/30/27/78873dc8b6a56357517b74b6bb9568b80450e7bb4f6ef7e3fa9d22aa0bd7/charset_normalizer-3.5.1-cp312-cp312-macosx_10_13_universal2.whl"
+        },
+        "windows-x64": {
+          "filename": "charset_normalizer-3.5.1-cp312-cp312-win_amd64.whl",
+          "sha256": "3617ac3cfd8b9888f145ad89dd6e692285834b0201c6074a5eeaad3fd4d668c2",
+          "size": 200551,
+          "url": "https://files.pythonhosted.org/packages/9d/7a/4c6c298171e6b3e745633180ff59350fc0ca0db1ffd28df1e369e0579f71/charset_normalizer-3.5.1-cp312-cp312-win_amd64.whl"
+        }
+      },
+      "install_mode": "wheel_by_target",
+      "license": "MIT",
+      "version": "3.5.1"
+    },
+    "idna": {
+      "asset": {
+        "filename": "idna-3.19-py3-none-any.whl",
+        "sha256": "815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4",
+        "size": 68550,
+        "url": "https://files.pythonhosted.org/packages/57/b0/0e52c878c53f245edd3a11020f20979b3f490f245af532c7cae3027754b5/idna-3.19-py3-none-any.whl"
+      },
+      "install_mode": "wheel",
+      "license": "BSD-3-Clause",
+      "version": "3.19"
+    },
+    "jieba": {
+      "asset": {
+        "filename": "jieba-0.42.1.tar.gz",
+        "sha256": "055ca12f62674fafed09427f176506079bc135638a14e23e25be909131928db2",
+        "size": 19214172,
+        "url": "https://files.pythonhosted.org/packages/c6/cb/18eeb235f833b726522d7ebed54f2278ce28ba9438e3135ab0278d9792a2/jieba-0.42.1.tar.gz"
+      },
+      "install_mode": "sdist_vendored",
+      "license": "MIT",
+      "license_asset": {
+        "filename": "jieba-LICENSE",
+        "sha256": "18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37",
+        "size": 1075,
+        "url": "https://raw.githubusercontent.com/fxsjy/jieba/v0.42.1/LICENSE"
+      },
+      "source_prefix": "jieba-0.42.1/jieba/",
+      "version": "0.42.1"
+    },
+    "numpy": {
+      "assets": {
+        "macos-arm64": {
+          "filename": "numpy-2.5.2-cp312-cp312-macosx_11_0_arm64.whl",
+          "sha256": "4bbd96c833ecc8cc069ce518078fc8c60cb9cbfb0fea5b7a803ad65035596d03",
+          "size": 11903109,
+          "url": "https://files.pythonhosted.org/packages/60/2e/b5aee50a1f74ac815cf8331812cb8251e29024025de462e0c047641c614c/numpy-2.5.2-cp312-cp312-macosx_11_0_arm64.whl"
+        },
+        "macos-x64": {
+          "filename": "numpy-2.5.2-cp312-cp312-macosx_10_13_x86_64.whl",
+          "sha256": "14e373cfc6387177e8409dac3c7159be8eb05cd77096cd7c950268b86f62831c",
+          "size": 16891693,
+          "url": "https://files.pythonhosted.org/packages/69/72/dccb0aaf40972777283303919f613964227266d0c13adebb79ac124f1c3e/numpy-2.5.2-cp312-cp312-macosx_10_13_x86_64.whl"
+        },
+        "windows-x64": {
+          "filename": "numpy-2.5.2-cp312-cp312-win_amd64.whl",
+          "sha256": "28ac63476ec7651484215ee7fa15a1f78b57c14621f01e392afe17b9a1390ce4",
+          "size": 12464674,
+          "url": "https://files.pythonhosted.org/packages/7f/b9/87fea2769fe1c47c1b5b01d8310772c9d1a85d485de7cf386ef7a3332b02/numpy-2.5.2-cp312-cp312-win_amd64.whl"
+        }
+      },
+      "install_mode": "wheel_by_target",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "version": "2.5.2"
+    },
+    "requests": {
+      "asset": {
+        "filename": "requests-2.34.2-py3-none-any.whl",
+        "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+        "size": 73075,
+        "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl"
+      },
+      "install_mode": "wheel",
+      "license": "Apache-2.0",
+      "version": "2.34.2"
+    },
+    "urllib3": {
+      "asset": {
+        "filename": "urllib3-2.7.0-py3-none-any.whl",
+        "sha256": "9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897",
+        "size": 131087,
+        "url": "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl"
+      },
+      "install_mode": "wheel",
+      "license": "MIT",
+      "version": "2.7.0"
+    }
+  },
+  "policy": {
+    "client_network_install": false,
+    "modify_customer_content": false,
+    "modify_system_python": false,
+    "require_asset_sha256": true,
+    "require_licenses": true,
+    "require_sbom": true
+  },
+  "provider": "astral-sh/python-build-standalone",
+  "provider_release": "20260825",
+  "python_version": "3.12.14",
+  "runtime_id": "cpython-3.12.14+20260825",
+  "schema_version": 1,
+  "targets": {
+    "macos-arm64": {
+      "architecture": "aarch64",
+      "asset": {
+        "filename": "cpython-3.12.14+20260825-aarch64-apple-darwin-install_only.tar.gz",
+        "sha256": "62eef3fcf48fa4f792d0d6d267c140b81aaea0edca4ae0641d8021854314f966",
+        "size": 25128196,
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260825/cpython-3.12.14%2B20260825-aarch64-apple-darwin-install_only.tar.gz"
+      },
+      "interpreter": "python/bin/python3",
+      "platform": "macos",
+      "site_packages": "python/lib/python3.12/site-packages"
+    },
+    "macos-x64": {
+      "architecture": "x86_64",
+      "asset": {
+        "filename": "cpython-3.12.14+20260825-x86_64-apple-darwin-install_only.tar.gz",
+        "sha256": "65da7bc373ea36cb7e413f2a20bcced9eeb7e5a83fa554ce9f6ec79abb8d7e31",
+        "size": 24824201,
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260825/cpython-3.12.14%2B20260825-x86_64-apple-darwin-install_only.tar.gz"
+      },
+      "interpreter": "python/bin/python3",
+      "platform": "macos",
+      "site_packages": "python/lib/python3.12/site-packages"
+    },
+    "windows-x64": {
+      "architecture": "x86_64",
+      "asset": {
+        "filename": "cpython-3.12.14+20260825-x86_64-pc-windows-msvc-install_only.tar.gz",
+        "sha256": "15d25c455ea25d6b24d7e58eabdf744fd0db3cfb977934ae08fd2237acd8ccc1",
+        "size": 46154932,
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260825/cpython-3.12.14%2B20260825-x86_64-pc-windows-msvc-install_only.tar.gz"
+      },
+      "interpreter": "python/python.exe",
+      "platform": "windows",
+      "site_packages": "python/Lib/site-packages"
+    }
+  }
+}

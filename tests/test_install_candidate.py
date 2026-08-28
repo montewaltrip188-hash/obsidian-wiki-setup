@@ -1,9 +1,12 @@
 import json
 import hashlib
+import gzip
+import io
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -38,7 +41,10 @@ def make_repo(root: Path, name: str, files=None):
     for relative, content in (files or {"README.md": name}).items():
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8")
     run("git", "-C", repo, "add", ".")
     run("git", "-C", repo, "commit", "-qm", "fixture")
     commit = run("git", "-C", repo, "rev-parse", "HEAD").stdout.strip()
@@ -46,8 +52,138 @@ def make_repo(root: Path, name: str, files=None):
     return repo, commit, tree
 
 
-def installer_contract_files():
+def deterministic_zip(files):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name, content in sorted(files.items()):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_STORED
+            info.external_attr = (0o100644 << 16)
+            archive.writestr(info, content)
+    return output.getvalue()
+
+
+def deterministic_tar_gz(files):
+    tar_output = io.BytesIO()
+    with tarfile.open(fileobj=tar_output, mode="w") as archive:
+        for name, content in sorted(files.items()):
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            info.mode = 0o755 if name.endswith(("python.exe", "python3")) else 0o644
+            info.mtime = 0
+            archive.addfile(info, io.BytesIO(content))
+    return gzip.compress(tar_output.getvalue(), mtime=0)
+
+
+def synthetic_runtime_files():
+    runtime_windows = deterministic_tar_gz(
+        {
+            "python/LICENSE.txt": b"fixture python license\n",
+            "python/Lib/site-packages/.keep": b"",
+            "python/python.exe": b"fixture-python-exe\n",
+        }
+    )
+    runtime_macos = deterministic_tar_gz(
+        {
+            "python/LICENSE.txt": b"fixture python license\n",
+            "python/lib/python3.12/site-packages/.keep": b"",
+            "python/bin/python3": b"#!/bin/sh\nexit 0\n",
+        }
+    )
+    wheel = deterministic_zip(
+        {
+            "fixture_dep/__init__.py": b"VERSION = '1.0.0'\n",
+            "fixture_dep-1.0.0.dist-info/METADATA": b"Name: fixture-dep\nVersion: 1.0.0\n",
+            "fixture_dep-1.0.0.dist-info/licenses/LICENSE": b"fixture wheel license\n",
+        }
+    )
+    jieba = deterministic_tar_gz(
+        {"jieba-0.42.1/jieba/__init__.py": b"__version__ = '0.42.1'\n"}
+    )
+    jieba_license = b"fixture jieba license\n"
+
+    def asset(filename, content):
+        return {
+            "filename": filename,
+            "repo_path": f"tests/runtime-fixtures/{filename}",
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "size": len(content),
+        }
+
+    runtime_windows_asset = asset("fixture-python-windows.tar.gz", runtime_windows)
+    runtime_macos_asset = asset("fixture-python-macos.tar.gz", runtime_macos)
+    wheel_asset = asset("fixture-dep.whl", wheel)
+    jieba_asset = asset("fixture-jieba.tar.gz", jieba)
+    license_asset = asset("fixture-jieba-LICENSE", jieba_license)
+    bom = {
+        "schema_version": 1,
+        "runtime_id": "fixture-python-3.12",
+        "provider": "fixture",
+        "provider_release": "fixture",
+        "python_version": "3.12.0",
+        "archive_flavor": "install_only",
+        "policy": {
+            "client_network_install": False,
+            "modify_system_python": False,
+            "modify_customer_content": False,
+            "require_asset_sha256": True,
+            "require_licenses": True,
+            "require_sbom": True,
+        },
+        "locked_versions": {"fixture-dep": "1.0.0", "jieba": "0.42.1"},
+        "targets": {
+            "windows-x64": {
+                "platform": "windows",
+                "architecture": "x86_64",
+                "interpreter": "python/python.exe",
+                "site_packages": "python/Lib/site-packages",
+                "asset": runtime_windows_asset,
+            },
+            "macos-x64": {
+                "platform": "macos",
+                "architecture": "x86_64",
+                "interpreter": "python/bin/python3",
+                "site_packages": "python/lib/python3.12/site-packages",
+                "asset": runtime_macos_asset,
+            },
+            "macos-arm64": {
+                "platform": "macos",
+                "architecture": "aarch64",
+                "interpreter": "python/bin/python3",
+                "site_packages": "python/lib/python3.12/site-packages",
+                "asset": runtime_macos_asset,
+            },
+        },
+        "packages": {
+            "fixture-dep": {
+                "version": "1.0.0",
+                "license": "MIT",
+                "install_mode": "wheel",
+                "asset": wheel_asset,
+            },
+            "jieba": {
+                "version": "0.42.1",
+                "license": "MIT",
+                "install_mode": "sdist_vendored",
+                "asset": jieba_asset,
+                "license_asset": license_asset,
+                "source_prefix": "jieba-0.42.1/jieba/",
+            },
+        },
+    }
     return {
+        "contracts/offline-keyword-runtime-bom.json": json.dumps(bom) + "\n",
+        "contracts/offline-keyword-runtime-bom.schema.json": "{}\n",
+        "tests/runtime-fixtures/fixture-python-windows.tar.gz": runtime_windows,
+        "tests/runtime-fixtures/fixture-python-macos.tar.gz": runtime_macos,
+        "tests/runtime-fixtures/fixture-dep.whl": wheel,
+        "tests/runtime-fixtures/fixture-jieba.tar.gz": jieba,
+        "tests/runtime-fixtures/fixture-jieba-LICENSE": jieba_license,
+    }
+
+
+def installer_contract_files():
+    files = {
         "activation-public-key.xml": "<RSAKeyValue>public only</RSAKeyValue>\n",
         "change-model.bat": "@echo off\n",
         "change-model.ps1": "Write-Output 'change model'\n",
@@ -87,6 +223,7 @@ def installer_contract_files():
         "tools/manage_wiki_skills.py": "print('manage')\n",
         "tools/vault_update.py": "print('vault update')\n",
         "tools/joint_update.py": "print('joint update')\n",
+        "tools/verify_keyword_runtime.py": "print('runtime probe')\n",
         "release/bundle-release.json": json.dumps(
             {
                 "manifest_format": 1,
@@ -102,6 +239,8 @@ def installer_contract_files():
             }
         ) + "\n",
     }
+    files.update(synthetic_runtime_files())
+    return files
 
 
 def product_contract_files():
@@ -382,6 +521,12 @@ class InstallCandidateCliTests(unittest.TestCase):
                 "contracts/legacy-adoption-approval.schema.json",
                 "contracts/legacy-adoption-receipt.schema.json",
                 "bundle-manifest.json",
+                "runtime/SBOM.json",
+                "runtime/THIRD-PARTY-NOTICES.md",
+                "runtime/runtime-install-manifest.json",
+                "runtime/targets/windows-x64/python/python.exe",
+                "runtime/targets/windows-x64/python/Lib/site-packages/fixture_dep/__init__.py",
+                "runtime/targets/windows-x64/python/Lib/site-packages/jieba/__init__.py",
                 "skills/claudecode-wiki-skills/core/design-juan-wiki/SKILL.md",
             ):
                 self.assertTrue((extracted / required).is_file(), required)
@@ -420,6 +565,12 @@ class InstallCandidateCliTests(unittest.TestCase):
             self.assertNotIn("setup-win.ps1", mac_names)
             self.assertNotIn("install.bat", mac_names)
             self.assertNotIn("change-model.ps1", mac_names)
+            self.assertIn(
+                "runtime/targets/macos-x64/python/bin/python3", mac_names
+            )
+            self.assertIn(
+                "runtime/targets/macos-arm64/python/bin/python3", mac_names
+            )
             self.assertRegex(manifest["candidate_id"], r"^[0-9a-f]{64}$")
             self.assertEqual(manifest["default_skills"], [
                 "design-juan-wiki",

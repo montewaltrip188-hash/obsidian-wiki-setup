@@ -14,6 +14,11 @@ staging/
 ├── deploy-manifest.json
 ├── vault.zip
 ├── candidate.zip
+├── runtime/
+│   ├── SBOM.json
+│   ├── THIRD-PARTY-NOTICES.md
+│   ├── runtime-install-manifest.json
+│   └── targets/
 └── payload/
     ├── vault/
     ├── skills/claudecode-wiki-skills/
@@ -38,6 +43,13 @@ candidate.zip
 ├── extract-vault.py
 ├── tools/manage_wiki_skills.py
 ├── tools/joint_update.py
+├── tools/verify_keyword_runtime.py
+├── runtime/SBOM.json
+├── runtime/THIRD-PARTY-NOTICES.md
+├── runtime/runtime-install-manifest.json
+├── runtime/targets/windows-x64/            # Windows 候选
+├── runtime/targets/macos-x64/              # macOS 候选
+├── runtime/targets/macos-arm64/            # macOS 候选
 ├── scripts/manage-wiki-skills.ps1
 ├── scripts/manage-wiki-skills.sh
 ├── scripts/vault-update.ps1
@@ -55,6 +67,8 @@ candidate.zip
 ```
 
 `payload/**` 只作为本地构建证据参与清单与 `verify`，不进入客户 ZIP。客户 ZIP 中的 Vault 只出现一次，即根目录的 `vault.zip`。
+
+运行时由 `contracts/offline-keyword-runtime-bom.json` 唯一冻结。Builder 只接受 BOM 中精确 URL/仓库路径、size 与 SHA-256 完全一致的资产，安全展开 `install_only` 归档和 wheel，并以锁定 sdist vendoring 原版 Jieba。每个目标目录都有逐文件摘要的 `.runtime-target.json`；SBOM、许可证通知和运行时安装清单与全部目标文件一起进入 candidate manifest、candidate ID 和确定性 ZIP，因此后续发行签名覆盖整个离线运行时供应链。客户端不得执行 pip 联网补包、修改系统 Python 或把运行时写入客户内容目录。
 
 客户候选同时携带 U1 只读检查、U2 Vault 事务和 U3 Vault + Skill 联合事务入口及合同 Schema。产品版本合同和路径策略来自 `vault.zip` 内的产品树；Skill 兼容合同来自冻结的 Skill 树；安装器仓库只保存非自引用的 `release/bundle-release.json`，Builder 再以三仓精确 commit/tree 和最终 candidate ID 生成根目录 `bundle-manifest.json`。三者缺一或不闭合时，所有命令必须停止。仓库内 bundle 仍为 `unreleased_candidate` 且版本未分配时，候选只能用于隔离验收，不能冒充 stable 发行。
 

@@ -21,7 +21,9 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.home = self.root / "home"
         self.source = self.root / "source"
+        self.runtime_source = self.root / "runtime-source"
         self._make_source("2.0.1")
+        self._make_runtime_source()
 
     def tearDown(self):
         self.temp.cleanup()
@@ -47,9 +49,55 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         ima.mkdir(parents=True, exist_ok=True)
         (ima / "SKILL.md").write_text("---\nname: ima-skill\n---\n", encoding="utf-8")
 
+    def _make_runtime_source(self):
+        files = {
+            "python/python.exe": b"fixture isolated python\n",
+            "python/Lib/site-packages/jieba/__init__.py": b"__version__ = '0.42.1'\n",
+            "python/Lib/site-packages/numpy/__init__.py": b"__version__ = '2.5.2'\n",
+            "python/Lib/site-packages/requests/__init__.py": b"__version__ = '2.34.2'\n",
+        }
+        records = []
+        for relative, content in sorted(files.items()):
+            path = self.runtime_source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            records.append(
+                {
+                    "mode": "100644",
+                    "path": relative,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "size": len(content),
+                }
+            )
+        material = b"".join(
+            record["path"].encode("utf-8")
+            + b"\0"
+            + str(record["size"]).encode("ascii")
+            + b"\0"
+            + record["sha256"].encode("ascii")
+            + b"\n"
+            for record in records
+        )
+        descriptor = {
+            "files": records,
+            "interpreter": "python/python.exe",
+            "runtime_id": "fixture-python-3.12",
+            "schema_version": 1,
+            "site_packages": "python/Lib/site-packages",
+            "target": "windows-x64",
+            "tree_sha256": hashlib.sha256(material).hexdigest(),
+        }
+        (self.runtime_source / ".runtime-target.json").write_text(
+            json.dumps(descriptor, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
     def run_cli(self, *args, expected=0):
+        arguments = list(map(str, args))
+        if arguments and arguments[0] in {"plan", "install"} and "--runtime-source" not in arguments:
+            arguments.extend(["--runtime-source", str(self.runtime_source)])
         result = subprocess.run(
-            [sys.executable, str(CLI), *map(str, args)],
+            [sys.executable, str(CLI), *arguments],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -72,6 +120,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
                 str(self.source),
                 "--home",
                 str(self.home),
+                "--runtime-source",
+                str(self.runtime_source),
             ],
             cwd=ROOT,
             text=True,
@@ -108,6 +158,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
                 str(self.source),
                 "--home",
                 str(self.home),
+                "--runtime-source",
+                str(self.runtime_source),
             ],
             cwd=ROOT,
             text=True,
@@ -188,8 +240,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual("keyword", plan["offline_baseline"])
         self.assertEqual("optional", plan["vector_capability"])
         self.assertFalse(plan["skill_installed"])
-        self.assertFalse(plan["keyword_runtime_ready"])
-        self.assertEqual("KEYWORD_RUNTIME_UNPROVISIONED", plan["keyword_runtime_error"])
+        self.assertTrue(plan["keyword_runtime_ready"])
+        self.assertIsNone(plan["keyword_runtime_error"])
         self.assertEqual("install", plan["action"])
         self.assertEqual("ready", plan["status"])
 
@@ -446,8 +498,9 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual(list(CORE), state["owned_skills"])
         self.assertEqual("keyword", manifest["capabilities"]["offline_baseline"])
         self.assertTrue(receipt["skill_installed"])
-        self.assertFalse(receipt["keyword_runtime_ready"])
-        self.assertEqual("KEYWORD_RUNTIME_UNPROVISIONED", receipt["keyword_runtime_error"])
+        self.assertTrue(receipt["keyword_runtime_ready"])
+        self.assertIsNone(receipt["keyword_runtime_error"])
+        self.assertTrue((installed / ".runtime" / "python" / "python.exe").is_file())
         self.assertGreater(len(manifest["files"]), 6)
         self.assertEqual("installed", receipt["status"])
 
@@ -559,6 +612,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
                 str(self.source),
                 "--home",
                 str(self.home),
+                "--runtime-source",
+                str(self.runtime_source),
             ],
             cwd=ROOT,
             text=True,
@@ -596,6 +651,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
                 str(self.source),
                 "--home",
                 str(self.home),
+                "--runtime-source",
+                str(self.runtime_source),
             ],
             cwd=ROOT,
             text=True,
@@ -700,6 +757,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
                 str(self.source),
                 "--home",
                 str(self.home),
+                "--runtime-source",
+                str(self.runtime_source),
             ],
             cwd=ROOT,
             text=True,
@@ -984,8 +1043,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         verified = self.run_cli("verify", "--home", self.home)
         self.assertEqual("verified", verified["status"])
         self.assertTrue(verified["skill_installed"])
-        self.assertFalse(verified["keyword_runtime_ready"])
-        self.assertEqual("KEYWORD_RUNTIME_UNPROVISIONED", verified["keyword_runtime_error"])
+        self.assertTrue(verified["keyword_runtime_ready"])
+        self.assertIsNone(verified["keyword_runtime_error"])
         installed_skill = (
             self.home
             / ".agents"

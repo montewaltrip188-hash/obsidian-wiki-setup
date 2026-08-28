@@ -375,6 +375,10 @@ $vaultManifest = Join-Path $repoRoot "deploy-manifest.json"
 $vaultDeployer = Join-Path $repoRoot "extract-vault.py"
 $skillSource = Join-Path $repoRoot "skills\claudecode-wiki-skills"
 $skillManager = Join-Path $repoRoot "tools\manage_wiki_skills.py"
+$runtimeProbe = Join-Path $repoRoot "tools\verify_keyword_runtime.py"
+$runtimeSource = Join-Path $repoRoot "runtime\targets\windows-x64"
+$runtimeDescriptor = Join-Path $runtimeSource ".runtime-target.json"
+$pythonCommand = Join-Path $runtimeSource "python\python.exe"
 foreach ($requiredFile in @($vaultZip, $vaultManifest, $vaultDeployer)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         Write-Host "  [!] 缺少安全部署文件: $requiredFile" -ForegroundColor Red
@@ -382,20 +386,21 @@ foreach ($requiredFile in @($vaultZip, $vaultManifest, $vaultDeployer)) {
     }
 }
 if (-not (Test-Path -LiteralPath $skillManager -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $runtimeProbe -PathType Leaf) -or
     -not (Test-Path -LiteralPath $skillSource -PathType Container)) {
     Write-Host "  [!] 缺少 Wiki Skill 安装组件" -ForegroundColor Red
     exit 1
 }
-$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-if (-not $pythonCommand) {
-    Write-Host "  [!] 安全部署需要 Python 3" -ForegroundColor Red
+if (-not (Test-Path -LiteralPath $runtimeDescriptor -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $pythonCommand -PathType Leaf)) {
+    Write-Host "  [!] 缺少已签名候选包内的 Windows x64 离线 Query 运行时" -ForegroundColor Red
     exit 1
 }
 $env:PYTHONUTF8 = "1"
 
 # 在修改 Vault 前完成 Skill 冲突与所有权只读预检，避免半安装。
-$skillPlanOutput = & $pythonCommand.Source $skillManager plan `
-    --source $skillSource --home $env:USERPROFILE 2>&1
+$skillPlanOutput = & $pythonCommand $skillManager plan `
+    --source $skillSource --home $env:USERPROFILE --runtime-source $runtimeSource 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  [!] Wiki Skill 预检未通过：$($skillPlanOutput -join ' ')" -ForegroundColor Red
     exit $LASTEXITCODE
@@ -417,8 +422,8 @@ if (Test-Path -LiteralPath $defaultVaultPath) {
 }
 
 Write-Step "安装 Wiki Skills..."
-    $skillInstallOutput = & $pythonCommand.Source $skillManager install `
-        --source $skillSource --home $env:USERPROFILE 2>&1
+    $skillInstallOutput = & $pythonCommand $skillManager install `
+        --source $skillSource --home $env:USERPROFILE --runtime-source $runtimeSource 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [!] Wiki Skill 安装失败：$($skillInstallOutput -join ' ')" -ForegroundColor Red
         exit $LASTEXITCODE
@@ -429,12 +434,12 @@ Write-Step "安装 Wiki Skills..."
         Write-Host "  [!] Wiki Skill 安装输出缺少事务恢复回执，需要人工处理" -ForegroundColor Red
         exit 1
     }
-    $skillVerifyOutput = & $pythonCommand.Source $skillManager verify `
+    $skillVerifyOutput = & $pythonCommand $skillManager verify `
         --home $env:USERPROFILE 2>&1
     if ($LASTEXITCODE -ne 0) {
         $verifyExit = $LASTEXITCODE
         Write-Host "  [!] Wiki Skill 验收失败：$($skillVerifyOutput -join ' ')" -ForegroundColor Red
-        & $pythonCommand.Source $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
+        & $pythonCommand $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  [!] Wiki Skill 验收失败，回执绑定恢复也失败，需要人工处理" -ForegroundColor Red
         }
@@ -443,8 +448,21 @@ Write-Step "安装 Wiki Skills..."
     $skillVerify = ($skillVerifyOutput -join [Environment]::NewLine) | ConvertFrom-Json
     Write-Host "  Wiki Skills 已安装并验收：$($skillVerify.skills -join ', ')" -ForegroundColor Green
     if (-not $skillInstall.keyword_runtime_ready) {
-        Write-Host "  [!] 关键词 Query 运行时尚未随包提供：$($skillInstall.keyword_runtime_error)" -ForegroundColor Yellow
+        Write-Host "  [!] 离线关键词 Query 运行时验收失败：$($skillInstall.keyword_runtime_error)" -ForegroundColor Red
+        & $pythonCommand $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
+        exit 1
     }
+    $installedVersionRoot = Join-Path $env:USERPROFILE ".agents\packages\claudecode-wiki-skills\versions\$($skillInstall.version)"
+    $installedRuntimePython = Join-Path $installedVersionRoot ".runtime\python\python.exe"
+    $installedQueryScript = Join-Path $installedVersionRoot "core\wiki-hybrid-search\scripts\wiki_search.py"
+    $runtimeProbeOutput = & $pythonCommand $runtimeProbe `
+        --runtime-python $installedRuntimePython --query-script $installedQueryScript 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [!] 离线关键词 Query 运行时实测失败：$($runtimeProbeOutput -join ' ')" -ForegroundColor Red
+        & $pythonCommand $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
+        exit 1
+    }
+    Write-Host "  离线关键词 Query 运行时实测通过" -ForegroundColor Green
 
     Write-Host "  正在验证候选包并安全部署知识库..." -ForegroundColor Yellow
     $deployArgs = @(
@@ -456,11 +474,11 @@ Write-Step "安装 Wiki Skills..."
     if ($allowExistingVault) {
         $deployArgs += "--allow-existing"
     }
-    $deployOutput = & $pythonCommand.Source @deployArgs 2>&1
+    $deployOutput = & $pythonCommand @deployArgs 2>&1
     $deployExit = $LASTEXITCODE
     if ($deployExit -ne 0) {
         Write-Host "  [!] Vault 部署失败：$($deployOutput -join ' ')" -ForegroundColor Red
-        & $pythonCommand.Source $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
+        & $pythonCommand $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  [!] Vault 部署失败，Wiki Skill 回执绑定恢复也失败，需要人工处理" -ForegroundColor Red
         }
@@ -489,7 +507,7 @@ if ($claudeExe) {
     if (Test-Path (Split-Path $claudianDataPath -Parent)) {
         $claudianData | Out-File -FilePath $claudianDataPath -Encoding utf8 -Force
         if ($deployReceipt) {
-            $finalizeOutput = & $pythonCommand.Source $vaultDeployer finalize-runtime-config `
+            $finalizeOutput = & $pythonCommand $vaultDeployer finalize-runtime-config `
                 --target $defaultVaultPath --deploy-receipt $deployReceipt 2>&1
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  [!] Claudian 运行时配置验收失败；已保留升级备份：$($finalizeOutput -join ' ')" -ForegroundColor Red

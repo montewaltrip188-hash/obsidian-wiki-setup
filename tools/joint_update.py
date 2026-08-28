@@ -324,8 +324,9 @@ def common_vault_arguments(args: argparse.Namespace) -> list[object]:
 def build_joint_plan(args: argparse.Namespace) -> dict:
     vault = args.vault.expanduser().resolve(strict=True)
     skill_source = args.skill_source.expanduser().resolve(strict=True)
+    runtime_source = args.runtime_source.expanduser().resolve(strict=True)
     home = args.home.expanduser().absolute()
-    if not vault.is_dir() or not skill_source.is_dir():
+    if not vault.is_dir() or not skill_source.is_dir() or not runtime_source.is_dir():
         raise JointUpdateError("JOINT_ROOT_NOT_DIRECTORY")
     if not isinstance(args.query, str) or not args.query.strip():
         raise JointUpdateError("STRICT_QUERY_INVALID")
@@ -340,6 +341,8 @@ def build_joint_plan(args: argparse.Namespace) -> dict:
         skill_source,
         "--home",
         home,
+        "--runtime-source",
+        runtime_source,
     ]
     if args.include_ima:
         skill_arguments.append("--include-ima")
@@ -482,6 +485,8 @@ def apply_joint(args: argparse.Namespace) -> dict:
             args.skill_source,
             "--home",
             home,
+            "--runtime-source",
+            args.runtime_source,
             "--link-mode",
             args.skill_link_mode,
         ]
@@ -725,6 +730,7 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skill-compatibility", required=True, type=Path)
     parser.add_argument("--bundle-manifest", required=True, type=Path)
     parser.add_argument("--skill-source", required=True, type=Path)
+    parser.add_argument("--runtime-source", required=True, type=Path)
     parser.add_argument("--home", required=True, type=Path)
     parser.add_argument("--include-ima", action="store_true")
     parser.add_argument("--query", required=True)
