@@ -236,6 +236,9 @@ def make_parser():
     undo = commands.add_parser("undo")
     undo.add_argument("--home", required=True, type=Path)
     undo.add_argument("--receipt", required=True, type=Path)
+    undo_check = commands.add_parser("undo-check")
+    undo_check.add_argument("--home", required=True, type=Path)
+    undo_check.add_argument("--receipt", required=True, type=Path)
     return parser
 
 
@@ -962,6 +965,23 @@ def undo(args):
     return attach_lock_audit(result, transaction)
 
 
+def undo_check(args):
+    """只读确认安装回执仍与当前受管 Skill 状态精确绑定。"""
+    home = args.home.absolute()
+    receipt = load_undo_receipt(args.receipt.absolute(), home)
+    try:
+        current = raw_managed_snapshot(home)
+    except (LifecycleError, OSError, KeyError, TypeError) as error:
+        raise LifecycleError(f"UNDO_AFTER_STATE_DRIFT: {error}") from error
+    if current != receipt["after"]:
+        raise LifecycleError("UNDO_AFTER_STATE_DRIFT")
+    return {
+        "status": "undo_ready",
+        "transaction_id": receipt["transaction_id"],
+        "changed": receipt["changed"],
+    }
+
+
 def undo_locked(args):
     home = args.home.absolute()
     receipt = load_undo_receipt(args.receipt.absolute(), home)
@@ -1184,6 +1204,8 @@ def main():
             result = uninstall(args)
         elif args.command == "undo":
             result = undo(args)
+        elif args.command == "undo-check":
+            result = undo_check(args)
         else:
             raise LifecycleError("不支持的命令")
         print(json.dumps(result, ensure_ascii=False, indent=2))

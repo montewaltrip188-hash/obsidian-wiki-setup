@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/joint-update-approval.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["approval_format", "allow_deletes", "allow_index_rebuild", "approve_skill_change", "approved_at", "approved_changes", "plan_id", "subject"],
+  "properties": {
+    "approval_format": {"const": 1},
+    "allow_deletes": {"type": "boolean"},
+    "allow_index_rebuild": {"type": "boolean"},
+    "approve_skill_change": {"type": "boolean"},
+    "approved_at": {"type": "string", "minLength": 1},
+    "approved_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["change_sha256", "path"],
+        "properties": {
+          "change_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "path": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subject": {"type": "string", "minLength": 1}
+  }
+}

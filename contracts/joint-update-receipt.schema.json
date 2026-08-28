@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/joint-update-receipt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["joint_receipt_format", "operation", "receipt_sha256", "status", "transaction_id"],
+  "properties": {
+    "joint_receipt_format": {"const": 1},
+    "operation": {"enum": ["apply", "apply_failure", "rollback"]},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["completed", "failed"]},
+    "transaction_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "recovery_status": {"enum": ["rolled_back"]},
+    "error": {"type": "string"},
+    "vault": {"type": "string"},
+    "vault_receipt": {"type": "string"},
+    "vault_rollback": {"type": ["object", "null"]},
+    "vault_rollback_receipt": {"type": "string"},
+    "skill_undo_receipt": {"type": "string"},
+    "skill_undo": {"type": ["object", "null"]},
+    "before_index": {"type": "object"},
+    "after_index": {"type": "object"},
+    "restored_index": {"type": "object"},
+    "index_receipt": {"type": "object"},
+    "index_status": {"type": "object"},
+    "strict_query": {"type": "object"},
+    "source_transaction_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}
+  }
+}

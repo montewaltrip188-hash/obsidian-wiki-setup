@@ -54,6 +54,9 @@ INSTALLER_COMMON_REQUIRED = {
     "contracts/update-plan.schema.json",
     "contracts/update-approval.schema.json",
     "contracts/update-transaction-receipt.schema.json",
+    "contracts/joint-update-plan.schema.json",
+    "contracts/joint-update-approval.schema.json",
+    "contracts/joint-update-receipt.schema.json",
     "extract-vault.py",
     "revoked-activation-ids.txt",
     "scripts/install-candidate.ps1",
@@ -61,8 +64,11 @@ INSTALLER_COMMON_REQUIRED = {
     "scripts/manage-wiki-skills.sh",
     "scripts/vault-update.ps1",
     "scripts/vault-update.sh",
+    "scripts/joint-update.ps1",
+    "scripts/joint-update.sh",
     "tools/manage_wiki_skills.py",
     "tools/vault_update.py",
+    "tools/joint_update.py",
     "release/bundle-release.json",
 }
 INSTALLER_PLATFORM_REQUIRED = {
@@ -82,8 +88,11 @@ INSTALLER_COMMON_PAYLOAD = {
     "scripts/manage-wiki-skills.sh",
     "scripts/vault-update.ps1",
     "scripts/vault-update.sh",
+    "scripts/joint-update.ps1",
+    "scripts/joint-update.sh",
     "tools/manage_wiki_skills.py",
     "tools/vault_update.py",
+    "tools/joint_update.py",
     "release/bundle-release.json",
 }
 INSTALLER_PLATFORM_PAYLOAD = {

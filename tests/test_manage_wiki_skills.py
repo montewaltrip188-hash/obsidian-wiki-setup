@@ -337,7 +337,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
     def test_machine_readable_contract_freezes_public_seams_and_manual_gates(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         self.assertEqual(
-            ["plan", "install", "verify", "rollback", "uninstall", "undo"],
+            ["plan", "install", "verify", "rollback", "uninstall", "undo", "undo-check"],
             contract["commands"],
         )
         self.assertEqual(list(CORE), contract["defaults"]["skills"])
@@ -357,7 +357,8 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual("kernel_file_lock", contract["transaction_lock"]["lease"])
         self.assertEqual("automatic_on_process_exit", contract["transaction_lock"]["stale_recovery"])
         self.assertEqual(
-            ["plan", "verify"], contract["transaction_lock"]["read_only_commands"]
+            ["plan", "verify", "undo-check"],
+            contract["transaction_lock"]["read_only_commands"],
         )
         self.assertIn("concurrent_mutation", contract["fail_closed_on"])
         self.assertIn("after_state_drift", contract["fail_closed_on"])
@@ -487,6 +488,31 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         ):
             for name in CORE:
                 self.assertFalse((runtime / name).exists())
+
+    def test_undo_check_is_read_only_and_detects_after_state_drift(self):
+        installed = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        receipt = Path(installed["undo_receipt"])
+        before = self.snapshot_home()
+
+        ready = self.run_cli(
+            "undo-check", "--home", self.home, "--receipt", receipt
+        )
+
+        self.assertEqual("undo_ready", ready["status"])
+        self.assertTrue(ready["changed"])
+        self.assertEqual(installed["transaction_id"], ready["transaction_id"])
+        self.assertEqual(before, self.snapshot_home())
+
+        skill_md = self.home / ".agents" / "skills" / "design-juan-wiki" / "SKILL.md"
+        skill_md.write_text(skill_md.read_text(encoding="utf-8") + "drift\n", encoding="utf-8")
+        drifted = self.snapshot_home()
+        blocked = self.run_cli(
+            "undo-check", "--home", self.home, "--receipt", receipt, expected=2
+        )
+        self.assertEqual("UNDO_AFTER_STATE_DRIFT", blocked["error"])
+        self.assertEqual(drifted, self.snapshot_home())
 
     def test_consumed_receipt_cannot_remove_later_identical_install(self):
         first = self.run_cli(

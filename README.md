@@ -98,6 +98,12 @@ U2 在 U1 的只读判断之后增加 `fresh-install / apply / verify / rollback
 
 事务写入使用同目录临时文件加原子替换。任一步骤失败会按写前备份恢复；回滚本身也先验证回执与完整备份、保护当前目标态，再执行事务恢复。客户内容目录不扫描、不备份、不修改。完整命令、回执和故障语义见 `contracts/vault-update-transaction-v1.md`。
 
+## U3：Vault + Skill 联合事务
+
+U3 用 `scripts/joint-update.ps1`（Windows）或 `scripts/joint-update.sh`（macOS/Linux）把 Skill 切换、已审批的 Vault 产品文件 diff、索引失效判断和严格 Query 验收绑定为同一个联合 `plan_id`。公共命令为 `plan / apply / verify / rollback`；其中 `plan` 只读组合 Vault plan、Skill plan、目标 Skill 的 `index-status` 和预期命中页 SHA-256，不写 Vault、Skill Home、索引或外部缓存。
+
+`apply` 只接受与联合计划完全一致的审批，并分别要求 `approve_skill_change` 与 `allow_index_rebuild`。执行顺序固定为：安装目标 Skill 并取得 `undo_receipt`，应用 Vault diff，检查四类索引派生签名，必要且获批时重建索引，最后运行严格 Query 并读取命中页全文核对摘要。失败时先回滚 Vault，再恢复写前索引，最后按回执撤销 Skill，并留下带 seal 的恢复回执；显式 `rollback` 也会先只读预检三个组件的当前状态和备份完整性，拒绝覆盖事务后的客户变化。完整合同见 `contracts/joint-vault-skill-transaction-v1.md`。
+
 ## Skill 安装位置
 
 Wiki Skill 使用用户级版本化安装：
@@ -108,7 +114,7 @@ Wiki Skill 使用用户级版本化安装：
 ~/.claude/skills/<skill>
 ```
 
-Claude Code 与 Codex 指向同一份物理版本树。安装器支持 `plan / install / verify / rollback / uninstall / undo`，不会替换整个 Skill 根目录。`install` 会在事务锁内确定真实前后状态，写入 state schema v2 的唯一 generation 并返回 `undo_receipt`；合法的旧 schema v1（无 generation，或带前序实现生成的合法 32 位 generation）仍可只读 plan/verify，首个 install 写事务会在验收原所有权与指纹后迁移到 v2，迁移本身也可凭回执撤销。setup 在 Skill 验收或后续 Vault 部署失败时，只能携带该回执执行 `undo`。`undo` 直接重算回执绑定的 after-state、generation、包指纹、入口指纹与运行时别名，不依赖可能持续失败的公共 `verify`；任一真实漂移或旧回执重放都会停止，也不会依据锁外旧 plan 删除其他事务的结果。锁释放审计写入失败只作为结果警告，不会把已经提交且已有回执的事务伪装成失败；只有 follower 已取得内核独占锁后，才会把无法解析的历史审计视为损坏的 stale audit 并覆盖，活锁不会按超时强拆。
+Claude Code 与 Codex 指向同一份物理版本树。安装器支持 `plan / install / verify / rollback / uninstall / undo / undo-check`，不会替换整个 Skill 根目录。`install` 会在事务锁内确定真实前后状态，写入 state schema v2 的唯一 generation 并返回 `undo_receipt`；合法的旧 schema v1（无 generation，或带前序实现生成的合法 32 位 generation）仍可只读 plan/verify，首个 install 写事务会在验收原所有权与指纹后迁移到 v2，迁移本身也可凭回执撤销。setup 在 Skill 验收或后续 Vault 部署失败时，只能携带该回执执行 `undo`。`undo-check` 只读验证回执和当前 after-state，供联合回滚在任何写入前完成预检。`undo` 直接重算回执绑定的 after-state、generation、包指纹、入口指纹与运行时别名，不依赖可能持续失败的公共 `verify`；任一真实漂移或旧回执重放都会停止，也不会依据锁外旧 plan 删除其他事务的结果。锁释放审计写入失败只作为结果警告，不会把已经提交且已有回执的事务伪装成失败；只有 follower 已取得内核独占锁后，才会把无法解析的历史审计视为损坏的 stale audit 并覆盖，活锁不会按超时强拆。
 
 ## 激活与下载安全
 
