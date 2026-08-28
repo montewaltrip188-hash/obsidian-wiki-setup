@@ -35,6 +35,7 @@ WINDOWS_RESERVED_NAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+RUNTIME_CONFIG_ALLOWED_PATHS = (".obsidian/plugins/claudian/data.json",)
 
 
 def strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -389,6 +390,8 @@ def deploy(args: argparse.Namespace) -> int:
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "archive_sha256": actual_archive_digest,
                 "tree_sha256": actual_tree,
+                "expected_current_tree_sha256": actual_tree,
+                "deployed_files": actual_files,
                 "staging": None,
             }
         )
@@ -420,6 +423,97 @@ def deploy(args: argparse.Namespace) -> int:
         )
         write_receipt(receipt_path, receipt)
         print(f"部署失败：{exc}；回执：{receipt_path}", file=sys.stderr)
+        return 1
+
+
+def finalize_runtime_config(args: argparse.Namespace) -> int:
+    target_input = Path(args.target).expanduser().absolute()
+    parent = target_input.parent.resolve(strict=True)
+    target = parent / target_input.name
+    deploy_receipt_path = Path(args.deploy_receipt).expanduser().resolve(strict=True)
+    try:
+        if target.is_symlink() or not target.is_dir():
+            raise DeployError("当前目标不是可验证的真实目录")
+        if deploy_receipt_path.parent != parent:
+            raise DeployError("部署回执必须位于目标的已解析同级目录")
+        try:
+            deploy_receipt = json.loads(deploy_receipt_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise DeployError(f"无法读取部署回执：{exc}") from exc
+        if deploy_receipt.get("operation") != "deploy" or deploy_receipt.get("status") != "completed":
+            raise DeployError("部署回执不是已完成的 deploy 回执")
+        receipt_target = Path(str(deploy_receipt.get("target", ""))).resolve(strict=True)
+        if receipt_target != target.resolve(strict=True):
+            raise DeployError("部署回执与 target 不匹配")
+
+        deployed_files = deploy_receipt.get("deployed_files")
+        if not isinstance(deployed_files, list) or not deployed_files:
+            raise DeployError("部署回执缺少产品文件基线")
+        baseline: dict[str, dict[str, Any]] = {}
+        for item in deployed_files:
+            require_exact_keys(item, {"path", "size", "sha256"}, "deployed_files[]")
+            path = validated_relative_path(item.get("path"), source="部署回执")
+            size = item.get("size")
+            digest = item.get("sha256")
+            if (
+                not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+                or not isinstance(digest, str)
+                or not SHA256_PATTERN.fullmatch(digest)
+                or path in baseline
+            ):
+                raise DeployError("部署回执产品文件基线无效")
+            baseline[path] = {"path": path, "size": size, "sha256": digest}
+        product_tree = deploy_receipt.get("tree_sha256")
+        if not isinstance(product_tree, str) or not SHA256_PATTERN.fullmatch(product_tree):
+            raise DeployError("部署回执缺少规范的产品树摘要")
+        if tree_digest(list(baseline.values())) != product_tree:
+            raise DeployError("部署回执产品文件基线与产品树摘要不一致")
+
+        current_records = scan_regular_tree(target)
+        current = {item["path"]: item for item in current_records}
+        allowed = set(RUNTIME_CONFIG_ALLOWED_PATHS)
+        baseline_protected = {path: item for path, item in baseline.items() if path not in allowed}
+        current_protected = {path: item for path, item in current.items() if path not in allowed}
+        if current_protected != baseline_protected:
+            raise DeployError("当前目标除受控运行时配置外已漂移，拒绝更新部署回执")
+        if not all(path in current for path in allowed):
+            raise DeployError("受控运行时配置文件不存在")
+
+        expected_current_tree = tree_digest(current_records)
+        deploy_receipt.update(
+            {
+                "expected_current_tree_sha256": expected_current_tree,
+                "runtime_config_finalization": {
+                    "finalized_at": datetime.now(timezone.utc).isoformat(),
+                    "allowed_paths": list(RUNTIME_CONFIG_ALLOWED_PATHS),
+                    "changes": [
+                        {
+                            "path": path,
+                            "before": baseline.get(path),
+                            "after": current[path],
+                        }
+                        for path in RUNTIME_CONFIG_ALLOWED_PATHS
+                    ],
+                },
+            }
+        )
+        write_receipt(deploy_receipt_path, deploy_receipt)
+        print(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "target": str(target),
+                    "deploy_receipt": str(deploy_receipt_path),
+                    "expected_current_tree_sha256": expected_current_tree,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    except Exception as exc:
+        print(f"运行时配置收口失败：{exc}；已保留部署备份", file=sys.stderr)
         return 1
 
 
@@ -464,7 +558,9 @@ def cleanup_backup(args: argparse.Namespace) -> int:
         receipt_backup = Path(str(deploy_receipt.get("backup", ""))).resolve(strict=True)
         if receipt_target != target.resolve(strict=True) or receipt_backup != backup.resolve(strict=True):
             raise DeployError("部署回执与 target/backup 不匹配")
-        expected_target_tree = deploy_receipt.get("tree_sha256")
+        expected_target_tree = deploy_receipt.get(
+            "expected_current_tree_sha256", deploy_receipt.get("tree_sha256")
+        )
         if not isinstance(expected_target_tree, str) or not SHA256_PATTERN.fullmatch(expected_target_tree):
             raise DeployError("部署回执缺少规范的目标树摘要")
         if tree_digest(scan_regular_tree(target)) != expected_target_tree:
@@ -513,6 +609,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="显式允许把现有真实目录先原子移动到同级 backup；backup 不自动清理",
     )
     deploy_parser.set_defaults(handler=deploy)
+
+    finalize_parser = subparsers.add_parser(
+        "finalize-runtime-config",
+        help="仅允许 Claudian data.json 作为部署后受控变更，并更新部署回执",
+    )
+    finalize_parser.add_argument("--target", required=True)
+    finalize_parser.add_argument("--deploy-receipt", required=True)
+    finalize_parser.set_defaults(handler=finalize_runtime_config)
 
     cleanup_parser = subparsers.add_parser(
         "cleanup-backup",

@@ -124,6 +124,28 @@ def cleanup_backup(target: Path, backup: Path, deploy_receipt: Path) -> subproce
     )
 
 
+def finalize_runtime_config(
+    target: Path, deploy_receipt: Path
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["PYTHONUTF8"] = "1"
+    return subprocess.run(
+        [
+            sys.executable,
+            str(DEPLOYER),
+            "finalize-runtime-config",
+            "--target",
+            str(target),
+            "--deploy-receipt",
+            str(deploy_receipt),
+        ],
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        env=environment,
+    )
+
+
 class SafeDeployTests(unittest.TestCase):
     def test_new_target_is_verified_and_switched_in(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -328,6 +350,103 @@ class SafeDeployTests(unittest.TestCase):
                 json.loads(cleanup_receipts[0].read_text(encoding="utf-8"))["status"],
                 "completed",
             )
+
+    def test_claudian_runtime_config_can_be_finalized_then_backup_cleaned(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            original_config = b'{"claudePath":"bundled-default"}\n'
+            runtime_config = b'{"claudePath":"C:/Users/test/bin/claude.exe"}\n'
+            archive, manifest = make_candidate(
+                root,
+                {
+                    "CLAUDE.md": b"rules\n",
+                    ".obsidian/plugins/claudian/data.json": original_config,
+                },
+            )
+            target = root / "ObsidianVault"
+            target.mkdir()
+            (target / "old.md").write_bytes(b"old")
+            deployed = deploy(archive, manifest, target, "--allow-existing")
+            self.assertEqual(deployed.returncode, 0, deployed.stderr)
+            backup = next(root.glob(".ObsidianVault.backup-*"))
+            deploy_receipt = next(root.glob(".ObsidianVault.deploy-receipt-*.json"))
+            config_path = target / ".obsidian/plugins/claudian/data.json"
+            config_path.write_bytes(runtime_config)
+
+            finalized = finalize_runtime_config(target, deploy_receipt)
+
+            self.assertEqual(finalized.returncode, 0, finalized.stderr)
+            receipt = json.loads(deploy_receipt.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["tree_sha256"], tree_digest({
+                "CLAUDE.md": b"rules\n",
+                ".obsidian/plugins/claudian/data.json": original_config,
+            }))
+            self.assertEqual(
+                receipt["runtime_config_finalization"]["allowed_paths"],
+                [".obsidian/plugins/claudian/data.json"],
+            )
+            self.assertEqual(
+                receipt["expected_current_tree_sha256"],
+                tree_digest({
+                    "CLAUDE.md": b"rules\n",
+                    ".obsidian/plugins/claudian/data.json": runtime_config,
+                }),
+            )
+
+            cleaned = cleanup_backup(target, backup, deploy_receipt)
+
+            self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
+            self.assertFalse(backup.exists())
+
+    def test_runtime_config_finalize_refuses_non_whitelisted_drift_and_keeps_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            archive, manifest = make_candidate(
+                root,
+                {
+                    "CLAUDE.md": b"rules\n",
+                    ".obsidian/plugins/claudian/data.json": b"{}\n",
+                },
+            )
+            target = root / "ObsidianVault"
+            target.mkdir()
+            (target / "old.md").write_bytes(b"old")
+            deployed = deploy(archive, manifest, target, "--allow-existing")
+            self.assertEqual(deployed.returncode, 0, deployed.stderr)
+            backup = next(root.glob(".ObsidianVault.backup-*"))
+            deploy_receipt = next(root.glob(".ObsidianVault.deploy-receipt-*.json"))
+            receipt_before = deploy_receipt.read_bytes()
+            (target / ".obsidian/plugins/claudian/data.json").write_bytes(b'{"claudePath":"runtime"}\n')
+            (target / "CLAUDE.md").write_bytes(b"unauthorized drift\n")
+
+            result = finalize_runtime_config(target, deploy_receipt)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("漂移", result.stderr)
+            self.assertTrue(backup.is_dir())
+            self.assertEqual(deploy_receipt.read_bytes(), receipt_before)
+
+    def test_runtime_config_finalize_requires_receipt_target_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            archive, manifest = make_candidate(
+                root,
+                {".obsidian/plugins/claudian/data.json": b"{}\n"},
+            )
+            deployed_target = root / "DeployedVault"
+            deployed = deploy(archive, manifest, deployed_target)
+            self.assertEqual(deployed.returncode, 0, deployed.stderr)
+            deploy_receipt = next(root.glob(".DeployedVault.deploy-receipt-*.json"))
+            other_target = root / "OtherVault"
+            other_target.mkdir()
+            config = other_target / ".obsidian/plugins/claudian/data.json"
+            config.parent.mkdir(parents=True)
+            config.write_bytes(b'{"claudePath":"runtime"}\n')
+
+            result = finalize_runtime_config(other_target, deploy_receipt)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("不匹配", result.stderr)
 
     def test_backup_cleanup_refuses_when_current_target_drifted(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
