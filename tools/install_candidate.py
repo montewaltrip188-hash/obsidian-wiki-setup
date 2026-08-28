@@ -535,6 +535,27 @@ def wheel_file_entries(content: bytes, label: str):
         raise CandidateError(f"{label} 不是有效 wheel") from exc
 
 
+def is_license_path(path: str) -> bool:
+    """识别 wheel 内应归档而不应保留深层安装路径的许可证文件。"""
+    lowered = path.casefold()
+    basename = PurePosixPath(path).name.casefold()
+    return "/licenses/" in f"/{lowered}" or basename.startswith(
+        ("license", "copying", "notice")
+    )
+
+
+def flattened_license_path(
+    target_name: str, package_name: str, path: str, content: bytes
+) -> str:
+    """为许可证生成短、稳定且内容寻址的候选包路径。"""
+    normalized_package = re.sub(r"[-_.]+", "-", package_name).strip("-").casefold()
+    basename = re.sub(r"[^A-Za-z0-9._-]", "_", PurePosixPath(path).name)[:48]
+    if not basename:
+        basename = "LICENSE"
+    digest = hashlib.sha256(content).hexdigest()[:16]
+    return f"runtime/licenses/{target_name}/{normalized_package}/{digest}-{basename}"
+
+
 def runtime_file_record(path: str, mode: str, content: bytes) -> dict:
     return {
         "mode": mode,
@@ -603,6 +624,7 @@ def build_runtime_payload(
         raise CandidateError("离线关键词运行时平台目标不完整")
 
     all_entries = []
+    flattened_licenses = {}
     target_receipts = {}
     for target_name in selected:
         target = targets[target_name]
@@ -630,15 +652,22 @@ def build_runtime_payload(
                 asset = package_asset(package, target_name)
                 wheel = asset_bytes(asset, installer_source, cache)
                 extracted = wheel_file_entries(wheel, f"{package_name} wheel")
-                if not any(
-                    "/licenses/" in f"/{path.casefold()}" or PurePosixPath(path).name.casefold().startswith("license")
-                    for path, _, _ in extracted
-                ):
+                license_entries = [entry for entry in extracted if is_license_path(entry[0])]
+                if not license_entries:
                     raise CandidateError(f"依赖 wheel 缺少许可证：{package_name}")
                 target_entries.extend(
                     (f"{root}/{site_packages}/{path}", mode, content)
                     for path, mode, content in extracted
+                    if not is_license_path(path)
                 )
+                for path, _, content in license_entries:
+                    license_path = flattened_license_path(
+                        target_name, package_name, path, content
+                    )
+                    existing = flattened_licenses.get(license_path)
+                    if existing is not None and existing != content:
+                        raise CandidateError(f"许可证短路径碰撞：{license_path}")
+                    flattened_licenses[license_path] = content
             elif install_mode == "sdist_vendored":
                 source = asset_bytes(package.get("asset"), installer_source, cache)
                 prefix = package.get("source_prefix")
@@ -705,10 +734,20 @@ def build_runtime_payload(
             "tree_sha256": descriptor["tree_sha256"],
         }
 
+    license_entries = [
+        (path, "100644", content)
+        for path, content in sorted(flattened_licenses.items())
+    ]
+    all_entries.extend(license_entries)
+    license_records = [
+        runtime_file_record(path, mode, content)
+        for path, mode, content in license_entries
+    ]
     bom_sha256 = hashlib.sha256(bom_content).hexdigest()
     sbom = {
         "bom": bom,
         "bom_sha256": bom_sha256,
+        "flattened_license_files": license_records,
         "schema_version": 1,
         "selected_targets": selected,
     }
@@ -719,7 +758,13 @@ def build_runtime_payload(
     ]
     for name, package in sorted(packages.items()):
         notices.append(f"- {name} {package.get('version')}: {package.get('license')}")
-    notices.extend(["", "各目标的许可证文件保留在 Python 目录和 site-packages 的 licenses 目录中。", ""])
+    notices.extend(
+        [
+            "",
+            "Python 与 vendored 依赖许可证保留在各目标运行时中；wheel 许可证按内容寻址归档在 runtime/licenses/<target>/<package>/。",
+            "",
+        ]
+    )
     install_manifest = {
         "bom_sha256": bom_sha256,
         "runtime_id": bom.get("runtime_id"),

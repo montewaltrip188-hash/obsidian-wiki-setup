@@ -94,7 +94,7 @@ def synthetic_runtime_files():
         {
             "fixture_dep/__init__.py": b"VERSION = '1.0.0'\n",
             "fixture_dep-1.0.0.dist-info/METADATA": b"Name: fixture-dep\nVersion: 1.0.0\n",
-            "fixture_dep-1.0.0.dist-info/licenses/LICENSE": b"fixture wheel license\n",
+            "fixture_dep-1.0.0.dist-info/licenses/vendor/deeply/nested/source/component/LICENSE": b"fixture wheel license\n",
         }
     )
     jieba = deterministic_tar_gz(
@@ -547,6 +547,12 @@ class InstallCandidateCliTests(unittest.TestCase):
             self.assertIsNone(bundle_manifest["bundle_version"])
             self.assertFalse(any(name.startswith("payload/") for name in names))
             self.assertFalse(any(name.startswith("vault/") for name in names))
+            self.assertTrue(
+                any(name.startswith("runtime/licenses/windows-x64/fixture-dep/") for name in names)
+            )
+            self.assertFalse(
+                any("dist-info/licenses/vendor/deeply/nested" in name for name in names)
+            )
 
             mac_plan = root / "mac-plan.json"
             mac_staging = root / "candidate-macos"
