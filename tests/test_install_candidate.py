@@ -185,6 +185,11 @@ def synthetic_runtime_files():
 def installer_contract_files():
     files = {
         "activation-public-key.xml": "<RSAKeyValue>public only</RSAKeyValue>\n",
+        "release/release-signing-public-key.pem": (
+            "-----BEGIN PUBLIC KEY-----\n"
+            "ZmFrZS1wdWJsaWMta2V5\n"
+            "-----END PUBLIC KEY-----\n"
+        ),
         "change-model.bat": "@echo off\n",
         "change-model.ps1": "Write-Output 'change model'\n",
         "change-model.sh": "#!/bin/sh\necho change model\n",
@@ -668,6 +673,22 @@ class InstallCandidateCliTests(unittest.TestCase):
                 "issuer-note.txt",
                 "-----BEGIN "
                 "PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n",
+            ),
+            "encrypted_private_key": (
+                "installer",
+                "release/release-signing-private-encrypted.pem",
+                "-----BEGIN ENCRYPTED PRIVATE KEY-----\nsecret\n"
+                "-----END ENCRYPTED PRIVATE KEY-----\n",
+            ),
+            "protected_passphrase": (
+                "installer",
+                "release/release-signing-passphrase.dpapi",
+                b"protected-secret",
+            ),
+            "malformed_pinned_public_key": (
+                "installer",
+                "release/release-signing-public-key.pem",
+                "not a public key\n",
             ),
         }
         for case, (source_name, bad_path, bad_content) in bad_files.items():

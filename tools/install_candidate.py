@@ -121,6 +121,7 @@ SECRET_PATTERNS = (
     re.compile(rb"(?i)[?&]access_token=[A-Za-z0-9_-]{24,}"),
     re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 )
+RELEASE_SIGNING_PUBLIC_KEY = "release/release-signing-public-key.pem"
 
 
 class CandidateError(RuntimeError):
@@ -212,11 +213,36 @@ def validate_blob(source_name: str, path: str, content: bytes):
     if source_name == "installer" and lowered.endswith(".zip"):
         raise CandidateError(f"安装器仓库禁止跟踪手工归档：{path}")
     basename = PurePosixPath(lowered).name
+    is_pinned_release_public_key = (
+        source_name == "installer" and lowered == RELEASE_SIGNING_PUBLIC_KEY
+    )
+    if is_pinned_release_public_key:
+        if not re.fullmatch(
+            rb"-----BEGIN PUBLIC KEY-----\r?\n"
+            rb"[A-Za-z0-9+/=\r\n]+"
+            rb"-----END PUBLIC KEY-----\r?\n?",
+            content,
+        ):
+            raise CandidateError(f"发布签名公钥格式无效：{path}")
+    sensitive_suffix = PurePosixPath(lowered).suffix in (
+        ".key",
+        ".pem",
+        ".p12",
+        ".pfx",
+        ".dpapi",
+    )
     if (
-        "private-key" in lowered
-        or "private_key" in lowered
-        or basename == ".env"
-        or PurePosixPath(lowered).suffix in (".key", ".pem", ".p12", ".pfx")
+        not is_pinned_release_public_key
+        and (
+            "private-key" in lowered
+            or "private_key" in lowered
+            or "private-encrypted" in lowered
+            or "private_encrypted" in lowered
+            or "passphrase" in lowered
+            or "password" in lowered
+            or sensitive_suffix
+            or basename == ".env"
+        )
     ):
         raise CandidateError(f"私钥路径禁止进入候选：{path}")
     if content.startswith(b"version https://git-lfs.github.com/spec/v1\n"):
