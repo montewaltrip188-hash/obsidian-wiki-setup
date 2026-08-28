@@ -10,10 +10,126 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STEP=1
 
+VALIDATE_ACTIVATION_ONLY=false
+ACTIVATION_CODE=""
+ACTIVATION_PUBLIC_KEY_PATH="$SCRIPT_DIR/activation-public-key.xml"
+REVOKED_ACTIVATION_IDS_PATH="$SCRIPT_DIR/revoked-activation-ids.txt"
+EXPECTED_PRODUCT="obsidian-llm-wiki"
+EXPECTED_VERSION="2.1"
+NOW_UTC=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --validate-activation-only) VALIDATE_ACTIVATION_ONLY=true; shift ;;
+        --activation-code) ACTIVATION_CODE="${2:-}"; shift 2 ;;
+        --public-key) ACTIVATION_PUBLIC_KEY_PATH="${2:-}"; shift 2 ;;
+        --revoked-ids) REVOKED_ACTIVATION_IDS_PATH="${2:-}"; shift 2 ;;
+        --expected-product) EXPECTED_PRODUCT="${2:-}"; shift 2 ;;
+        --expected-version) EXPECTED_VERSION="${2:-}"; shift 2 ;;
+        --now-utc) NOW_UTC="${2:-}"; shift 2 ;;
+        *) printf "未知参数: %s\n" "$1" >&2; exit 1 ;;
+    esac
+done
+
 green()  { printf "\033[32m%s\033[0m\n" "$1"; }
 yellow() { printf "\033[33m%s\033[0m\n" "$1"; }
 red()    { printf "\033[31m%s\033[0m\n" "$1"; }
 step()   { echo ""; printf "\033[36m[%d] %s\033[0m\n" "$STEP" "$1"; STEP=$((STEP+1)); }
+
+verify_wiki2_activation() {
+    local code="$1"
+    local public_key_path="$2"
+    local revoked_ids_path="$3"
+    local expected_product="$4"
+    local expected_version="$5"
+    local now_utc="$6"
+    local python_bin=""
+
+    if command -v python3 >/dev/null 2>&1; then
+        python_bin="python3"
+    elif command -v python >/dev/null 2>&1; then
+        python_bin="python"
+    else
+        return 1
+    fi
+
+    "$python_bin" - "$code" "$public_key_path" "$revoked_ids_path" \
+        "$expected_product" "$expected_version" "$now_utc" <<'PY'
+import base64
+import datetime as dt
+import hashlib
+import hmac
+import json
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+
+def decode_base64url(value):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        raise ValueError("invalid base64url")
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def parse_utc(value):
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timezone required")
+    return parsed.astimezone(dt.timezone.utc)
+
+
+try:
+    code, key_path, revoked_path, expected_product, expected_version, now_value = sys.argv[1:]
+    segments = code.split(".")
+    if len(segments) != 3 or segments[0] != "WIKI2":
+        raise ValueError("invalid format")
+
+    payload_segment = segments[1]
+    signature = decode_base64url(segments[2])
+    root = ET.parse(key_path).getroot()
+    modulus = int.from_bytes(base64.b64decode(root.findtext("Modulus")), "big")
+    exponent = int.from_bytes(base64.b64decode(root.findtext("Exponent")), "big")
+    key_size = (modulus.bit_length() + 7) // 8
+    if len(signature) != key_size:
+        raise ValueError("invalid signature size")
+
+    encoded_message = pow(int.from_bytes(signature, "big"), exponent, modulus).to_bytes(key_size, "big")
+    digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(
+        payload_segment.encode("ascii")
+    ).digest()
+    padding_length = key_size - len(digest_info) - 3
+    if padding_length < 8:
+        raise ValueError("invalid key size")
+    expected_message = b"\x00\x01" + b"\xff" * padding_length + b"\x00" + digest_info
+    if not hmac.compare_digest(encoded_message, expected_message):
+        raise ValueError("invalid signature")
+
+    payload = json.loads(decode_base64url(payload_segment).decode("utf-8"))
+    required = ("activation_id", "product", "version", "expires_at")
+    if any(not isinstance(payload.get(field), str) or not payload[field].strip() for field in required):
+        raise ValueError("missing field")
+    if payload["product"] != expected_product or payload["version"] != expected_version:
+        raise ValueError("product or version mismatch")
+
+    now = parse_utc(now_value) if now_value else dt.datetime.now(dt.timezone.utc)
+    if parse_utc(payload["expires_at"]) <= now:
+        raise ValueError("expired")
+
+    revoked_ids = set()
+    try:
+        with open(revoked_path, encoding="utf-8-sig") as revoked_file:
+            revoked_ids = {
+                line.strip() for line in revoked_file
+                if line.strip() and not line.lstrip().startswith("#")
+            }
+    except FileNotFoundError:
+        pass
+    if payload["activation_id"] in revoked_ids:
+        raise ValueError("revoked")
+except Exception:
+    sys.exit(1)
+PY
+}
 
 echo ""
 green "============================================"
@@ -24,23 +140,21 @@ green "============================================"
 # 0. 激活码验证
 # ----------------------------------------------------------
 step "验证激活码..."
-printf "  请输入激活码: "
-read -r ACTIVATION_CODE
+if [ -z "$ACTIVATION_CODE" ]; then
+    printf "  请输入激活码: "
+    IFS= read -r -s ACTIVATION_CODE
+    echo ""
+fi
 
-if [[ "$ACTIVATION_CODE" =~ ^WIKI-([A-Z0-9]{4})-([A-Z0-9]{4})-([A-F0-9]{4})$ ]]; then
-    PREFIX="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-    INPUT_HASH="${BASH_REMATCH[3]}"
-    SECRET="wiki2026salt"
-    COMPUTED_HASH=$(printf '%s' "${PREFIX}${SECRET}" | shasum -a 256 | cut -c1-4 | tr 'a-f' 'A-F')
-    if [ "$INPUT_HASH" != "$COMPUTED_HASH" ]; then
-        red "  激活码无效，请联系服务提供者获取正确的激活码"
-        exit 1
-    fi
+if verify_wiki2_activation "$ACTIVATION_CODE" "$ACTIVATION_PUBLIC_KEY_PATH" \
+    "$REVOKED_ACTIVATION_IDS_PATH" "$EXPECTED_PRODUCT" "$EXPECTED_VERSION" "$NOW_UTC"; then
     green "  激活码验证通过"
 else
-    red "  激活码格式错误，正确格式: WIKI-XXXX-XXXX-XXXX"
+    red "  激活码无效，请联系服务提供者获取新的 WIKI2 激活码"
     exit 1
 fi
+
+[ "$VALIDATE_ACTIVATION_ONLY" = true ] && exit 0
 
 # ----------------------------------------------------------
 # 1. 安装 Obsidian

@@ -40,20 +40,19 @@ if ($downloadObsidian) { $fileCount = 6 }
 
 # 4. 下载
 Write-Host "正在下载安装包（共${fileCount}个文件）..." -ForegroundColor Yellow
-$token = "5e28dbb7eff603a08db961ca67dc32bd"
 $base = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.1"
 $baseObs = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
 $idx = 1
 
-Invoke-WebRequest "$base/obsidian-wiki-v2.1-part1.zip?access_token=$token" -OutFile "part1.zip"
+Invoke-WebRequest "$base/obsidian-wiki-v2.1-part1.zip" -OutFile "part1.zip"
 Write-Host "  [$idx/$fileCount] part1.zip 完成" -ForegroundColor Green; $idx++
-Invoke-WebRequest "$base/obsidian-wiki-v2.1-part2.zip?access_token=$token" -OutFile "part2.zip"
+Invoke-WebRequest "$base/obsidian-wiki-v2.1-part2.zip" -OutFile "part2.zip"
 Write-Host "  [$idx/$fileCount] part2.zip 完成" -ForegroundColor Green; $idx++
-Invoke-WebRequest "$base/obsidian-wiki-v2.1-part3.zip?access_token=$token" -OutFile "part3.zip"
+Invoke-WebRequest "$base/obsidian-wiki-v2.1-part3.zip" -OutFile "part3.zip"
 Write-Host "  [$idx/$fileCount] part3.zip 完成" -ForegroundColor Green; $idx++
 if ($downloadObsidian) {
     1..3 | ForEach-Object {
-        Invoke-WebRequest "$baseObs/Obsidian-win-part$_.bin?access_token=$token" -OutFile "Obsidian-win-part$_.bin"
+        Invoke-WebRequest "$baseObs/Obsidian-win-part$_.bin" -OutFile "Obsidian-win-part$_.bin"
         Write-Host "  [$idx/$fileCount] Obsidian-win-part$_.bin 完成" -ForegroundColor Green; $script:idx++
     }
 }

@@ -1,1 +1,14 @@
 generate-code.ps1
+
+# 签发侧私密材料与批量签发产物绝不能进入客户端仓库
+activation-private-key*.xml
+activation-private-key*.pem
+activation-private-key*.pfx
+activation-private-key*.key
+issuer-private/
+activation-codes.*
+
+# 本地组装与验收输出
+staging/
+build/
+dist/

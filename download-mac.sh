@@ -20,7 +20,6 @@ rm -rf "$d"
 mkdir -p "$d"
 cd "$d"
 
-TOKEN="5e28dbb7eff603a08db961ca67dc32bd"
 BASE="https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.1"
 
 # 检测 Obsidian 是否已安装
@@ -68,19 +67,19 @@ echo "正在并行下载安装包（共${FILE_COUNT}个文件）..."
 PIDS=""
 NAMES=""
 
-curl -L -s -o "main.zip" "${BASE}/obsidian-wiki-mac-part1.zip?access_token=${TOKEN}" &
+curl -L -s -o "main.zip" "${BASE}/obsidian-wiki-mac-part1.zip" &
 PIDS="$PIDS $!"
 NAMES="main.zip"
 
 if [ "$DOWNLOAD_CC" = true ]; then
-    curl -L -s -o "claude-part.zip" "${BASE}/obsidian-wiki-mac-part2-${ARCH}.zip?access_token=${TOKEN}" &
+    curl -L -s -o "claude-part.zip" "${BASE}/obsidian-wiki-mac-part2-${ARCH}.zip" &
     PIDS="$PIDS $!"
     NAMES="$NAMES claude-part.zip"
 fi
 
 if [ "$DOWNLOAD_CODEX" = true ]; then
     if [ "$ARCH" = "arm64" ]; then
-        curl -L -s -o "codex-part.zip" "${BASE}/codex-mac-arm64.zip?access_token=${TOKEN}" &
+        curl -L -s -o "codex-part.zip" "${BASE}/codex-mac-arm64.zip" &
         PIDS="$PIDS $!"
         NAMES="$NAMES codex-part.zip"
     else
@@ -91,7 +90,7 @@ fi
 
 if [ "$DOWNLOAD_OB" = true ]; then
     for i in 1 2 3; do
-        curl -L -s -o "Obsidian-mac-part${i}.bin" "${BASE}/Obsidian-mac-part${i}.bin?access_token=${TOKEN}" &
+        curl -L -s -o "Obsidian-mac-part${i}.bin" "${BASE}/Obsidian-mac-part${i}.bin" &
         PIDS="$PIDS $!"
         NAMES="$NAMES Obsidian-mac-part${i}.bin"
     done

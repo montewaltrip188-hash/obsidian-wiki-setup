@@ -5,8 +5,111 @@
 #       或在 PowerShell 中执行: powershell -ExecutionPolicy Bypass -File setup-win.ps1
 # ============================================================
 
+[CmdletBinding()]
+param(
+    [switch]$ValidateActivationOnly,
+    [string]$ActivationCode,
+    [string]$ActivationPublicKeyPath,
+    [string]$RevokedActivationIdsPath,
+    [string]$ExpectedProduct = "obsidian-llm-wiki",
+    [string]$ExpectedVersion = "2.1",
+    [string]$NowUtc
+)
+
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+if ([string]::IsNullOrWhiteSpace($ActivationPublicKeyPath)) {
+    $ActivationPublicKeyPath = Join-Path $repoRoot "activation-public-key.xml"
+}
+if ([string]::IsNullOrWhiteSpace($RevokedActivationIdsPath)) {
+    $RevokedActivationIdsPath = Join-Path $repoRoot "revoked-activation-ids.txt"
+}
+if ([string]::IsNullOrWhiteSpace($NowUtc)) {
+    $validationTime = [DateTimeOffset]::UtcNow
+} else {
+    $validationTime = [DateTimeOffset]::Parse(
+        $NowUtc,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal
+    ).ToUniversalTime()
+}
+
+function ConvertFrom-Base64Url {
+    param([Parameter(Mandatory)][string]$Value)
+    if ($Value -notmatch '^[A-Za-z0-9_-]+$') { throw "Base64Url 字段格式错误" }
+    $normalized = $Value.Replace('-', '+').Replace('_', '/')
+    switch ($normalized.Length % 4) {
+        0 { }
+        2 { $normalized += '==' }
+        3 { $normalized += '=' }
+        default { throw "Base64Url 字段长度错误" }
+    }
+    return [Convert]::FromBase64String($normalized)
+}
+
+function Test-Wiki2Activation {
+    param(
+        [Parameter(Mandatory)][string]$Code,
+        [Parameter(Mandatory)][string]$PublicKeyPath,
+        [Parameter(Mandatory)][string]$RevokedIdsPath,
+        [Parameter(Mandatory)][string]$Product,
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][DateTimeOffset]$AtUtc
+    )
+
+    $segments = $Code.Split('.')
+    if ($segments.Count -ne 3 -or $segments[0] -cne 'WIKI2') {
+        throw "激活码格式错误"
+    }
+    if (-not (Test-Path -LiteralPath $PublicKeyPath -PathType Leaf)) {
+        throw "激活公钥缺失"
+    }
+
+    $payloadSegment = $segments[1]
+    $signature = ConvertFrom-Base64Url $segments[2]
+    [xml]$publicKey = Get-Content -LiteralPath $PublicKeyPath -Raw
+    $rsaParameters = [Security.Cryptography.RSAParameters]::new()
+    $rsaParameters.Modulus = [Convert]::FromBase64String([string]$publicKey.RSAKeyValue.Modulus)
+    $rsaParameters.Exponent = [Convert]::FromBase64String([string]$publicKey.RSAKeyValue.Exponent)
+    $rsa = [Security.Cryptography.RSA]::Create()
+    try {
+        $rsa.ImportParameters($rsaParameters)
+        $verified = $rsa.VerifyData(
+            [Text.Encoding]::ASCII.GetBytes($payloadSegment),
+            $signature,
+            [Security.Cryptography.HashAlgorithmName]::SHA256,
+            [Security.Cryptography.RSASignaturePadding]::Pkcs1
+        )
+    } finally {
+        $rsa.Dispose()
+    }
+    if (-not $verified) { throw "激活码签名无效" }
+
+    $payloadJson = [Text.Encoding]::UTF8.GetString((ConvertFrom-Base64Url $payloadSegment))
+    $payload = $payloadJson | ConvertFrom-Json
+    foreach ($required in @('activation_id', 'product', 'version', 'expires_at')) {
+        if (-not $payload.PSObject.Properties[$required] -or [string]::IsNullOrWhiteSpace([string]$payload.$required)) {
+            throw "激活码缺少必需字段"
+        }
+    }
+    if ([string]$payload.product -cne $Product) { throw "激活码产品不匹配" }
+    if ([string]$payload.version -cne $Version) { throw "激活码版本不匹配" }
+
+    $expiresAt = [DateTimeOffset]::Parse(
+        [string]$payload.expires_at,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal
+    ).ToUniversalTime()
+    if ($expiresAt -le $AtUtc.ToUniversalTime()) { throw "激活码已过期" }
+
+    if (Test-Path -LiteralPath $RevokedIdsPath -PathType Leaf) {
+        $revokedIds = Get-Content -LiteralPath $RevokedIdsPath | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and -not $_.StartsWith('#') }
+        if ($revokedIds -ccontains [string]$payload.activation_id) { throw "激活码已撤销" }
+    }
+    return $true
+}
 
 function Write-Step { param($msg) Write-Host "`n[$script:step] $msg" -ForegroundColor Cyan; $script:step++ }
 $script:step = 1
@@ -19,30 +122,27 @@ Write-Host "============================================" -ForegroundColor Green
 # 0. 激活码验证
 # ----------------------------------------------------------
 Write-Step "验证激活码..."
-$activationCode = Read-Host "  请输入激活码"
-
-# 校验格式: WIKI-XXXX-XXXX-HASH
-if ($activationCode -match '^WIKI-([A-Z0-9]{4})-([A-Z0-9]{4})-([A-F0-9]{4})$') {
-    $prefix = $Matches[1] + $Matches[2]
-    $inputHash = $Matches[3]
-    $secret = "wiki2026salt"
-    $raw = "$prefix$secret"
-    $computedHash = [System.BitConverter]::ToString(
-        [System.Security.Cryptography.SHA256]::Create().ComputeHash(
-            [System.Text.Encoding]::UTF8.GetBytes($raw)
-        )
-    ).Replace("-","").Substring(0,4)
-    if ($inputHash -ne $computedHash) {
-        Write-Host "  [!] 激活码无效，请联系服务提供者获取正确的激活码" -ForegroundColor Red
-        Read-Host "按回车退出"
-        exit 1
+if ([string]::IsNullOrWhiteSpace($ActivationCode)) {
+    $secureCode = Read-Host "  请输入激活码" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureCode)
+    try {
+        $ActivationCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
+}
+
+try {
+    $null = Test-Wiki2Activation -Code $ActivationCode -PublicKeyPath $ActivationPublicKeyPath `
+        -RevokedIdsPath $RevokedActivationIdsPath -Product $ExpectedProduct -Version $ExpectedVersion `
+        -AtUtc $validationTime
     Write-Host "  激活码验证通过" -ForegroundColor Green
-} else {
-    Write-Host "  [!] 激活码格式错误，正确格式: WIKI-XXXX-XXXX-XXXX" -ForegroundColor Red
-    Read-Host "按回车退出"
+} catch {
+    Write-Host "  [!] 激活码无效，请联系服务提供者获取新的 WIKI2 激活码" -ForegroundColor Red
     exit 1
 }
+
+if ($ValidateActivationOnly) { exit 0 }
 
 # ----------------------------------------------------------
 # 1. 检查管理员权限

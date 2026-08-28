@@ -13,7 +13,14 @@
 
 1. **下载并安装 [Obsidian](https://obsidian.md/download)**（如果还没装）
 2. **购买 DeepSeek API**：前往 https://platform.deepseek.com ，充值 10 元（约可用 10 天）
-3. **下载本仓库的 Release 压缩包**，解压到任意目录
+3. **从本仓库的公开 Release 下载压缩包**，解压到任意目录。下载脚本不需要也不会携带访问令牌
+
+## 激活与密钥安全
+
+- 安装器只接受 `WIKI2.<payload>.<signature>` 格式的 RSA 签名激活码，旧版共享秘密格式不再兼容。
+- Windows 和 macOS 均隐藏激活码输入，并校验签名、产品、版本、有效期和撤销 ID。
+- 客户端包只包含 `activation-public-key.xml` 公钥和撤销清单，不包含签发私钥或批量签发产物。
+- 签发私钥必须保存在仓库目录之外；一旦私钥泄露，应轮换密钥并重新发布客户端公钥。
 
 ## 一键安装
 
