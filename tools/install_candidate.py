@@ -235,21 +235,16 @@ def include_in_candidate(source_name: str, source_path: str, platform: str) -> b
 
 def make_zip_bytes(entries) -> bytes:
     buffer = io.BytesIO()
-    with zipfile.ZipFile(
-        buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
-    ) as archive:
+    # 发布归档使用 ZIP_STORED，避免不同 Python/zlib 版本对相同输入产生
+    # 不同压缩字节；文件顺序、时间戳和权限也在下方固定。
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
         for relative, content, mode in entries:
             info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED
             info.create_system = 3
             permissions = 0o755 if mode == "100755" else 0o644
             info.external_attr = (stat.S_IFREG | permissions) << 16
-            archive.writestr(
-                info,
-                content,
-                compress_type=zipfile.ZIP_DEFLATED,
-                compresslevel=9,
-            )
+            archive.writestr(info, content, compress_type=zipfile.ZIP_STORED)
     return buffer.getvalue()
 
 

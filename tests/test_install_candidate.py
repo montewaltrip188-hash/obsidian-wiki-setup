@@ -248,6 +248,15 @@ class InstallCandidateCliTests(unittest.TestCase):
                 hashlib.sha256((first / "candidate.zip").read_bytes()).hexdigest(),
                 hashlib.sha256((second / "candidate.zip").read_bytes()).hexdigest(),
             )
+            for archive_path in (first / "candidate.zip", first / "vault.zip"):
+                with zipfile.ZipFile(archive_path) as archive:
+                    self.assertTrue(
+                        all(
+                            item.compress_type == zipfile.ZIP_STORED
+                            for item in archive.infolist()
+                        ),
+                        f"{archive_path.name} 必须使用跨 zlib 版本稳定的 ZIP_STORED",
+                    )
             deploy = json.loads((first / "deploy-manifest.json").read_text(encoding="utf-8"))
             vault_archive = (first / "vault.zip").read_bytes()
             self.assertEqual(
