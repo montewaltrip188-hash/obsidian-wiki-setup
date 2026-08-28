@@ -1,99 +1,163 @@
-﻿# Obsidian LLM Wiki - Windows 一键下载脚本
-# 用法: powershell -ExecutionPolicy Bypass -File download-win.ps1
+﻿param(
+    [string]$DestinationRoot = $(if (Test-Path -LiteralPath 'D:\') { 'D:\OB' } else { 'C:\OB' })
+)
 
-$d = if (Test-Path "D:\") { "D:\OB" } else { "C:\OB" }
-mkdir $d -Force | Out-Null
-cd $d
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# 1. 查找或安装 7-Zip
-$7z = @("C:\Program Files\7-Zip\7z.exe","C:\Program Files (x86)\7-Zip\7z.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $7z) {
-    Write-Host "正在下载 7-Zip..." -ForegroundColor Yellow
+$Repository = 'montewaltrip188-hash/obsidian-wiki-setup'
+$StableUrl = "https://raw.githubusercontent.com/$Repository/main/release/stable.json"
+$ExpectedKeyId = 'c1f596094a9a54ada888502a2ab7ef6bc5fecf82d4281dd4bbae2ae7bc9d9938'
+$ExpectedXmlSha256 = '3ab5cb740f3e92d3230561fe231f0f761e5fa1c3c058483a2ed2a48071b4245b'
+$ExpectedPemSha256 = '3cb1a3fec3d028d57735bb576939bd0c49f7589aa2edd8ff61ac41f3d5cd0802'
+
+function Get-Sha256([string]$Path) {
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-ReleaseUrl([string]$Tag, [string]$Name) {
+    return "https://github.com/$Repository/releases/download/$Tag/$Name"
+}
+
+function Save-HttpsFile([string]$Url, [string]$Path) {
+    $uri = [Uri]$Url
+    if ($uri.Scheme -ne 'https' -or $uri.Host -notin @('github.com', 'raw.githubusercontent.com')) {
+        throw "拒绝非 GitHub HTTPS 下载地址：$Url"
+    }
+    Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $Path
+}
+
+function Assert-FileRecord([string]$Path, $Record, [string]$Label) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Label 不存在"
+    }
+    $actualSize = (Get-Item -LiteralPath $Path).Length
+    $actualSha256 = Get-Sha256 $Path
+    if ($actualSize -ne [int64]$Record.size -or $actualSha256 -ne ([string]$Record.sha256).ToLowerInvariant()) {
+        throw "$Label 的长度或 SHA-256 不匹配"
+    }
+}
+
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+$work = Join-Path $tempRoot ('obsidian-wiki-download-' + [Guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($work) | Out-Null
+
+try {
+    $stablePath = Join-Path $work 'stable.json'
+    Save-HttpsFile $StableUrl $stablePath
+    $stable = Get-Content -LiteralPath $stablePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (
+        $stable.pointer_format -ne 1 -or
+        $stable.channel -ne 'stable' -or
+        $stable.release_state -ne 'stable' -or
+        $stable.repository -ne $Repository -or
+        $stable.tag -ne ('v' + $stable.bundle_version) -or
+        $stable.trust.key_id -ne $ExpectedKeyId -or
+        ([string]$stable.trust.xml.sha256).ToLowerInvariant() -ne $ExpectedXmlSha256 -or
+        ([string]$stable.trust.pem.sha256).ToLowerInvariant() -ne $ExpectedPemSha256
+    ) {
+        throw 'stable.json 合同或固定信任根不匹配'
+    }
+
+    $tag = [string]$stable.tag
+    $asset = $stable.assets.'windows-x64'
+    $expectedUrls = @{
+        manifest = Get-ReleaseUrl $tag ([string]$stable.manifest.name)
+        signature = Get-ReleaseUrl $tag ([string]$stable.signature.name)
+        asset = Get-ReleaseUrl $tag ([string]$asset.name)
+        xml = "https://raw.githubusercontent.com/$Repository/$tag/release/release-signing-public-key.xml"
+    }
+    if (
+        $stable.manifest.url -ne $expectedUrls.manifest -or
+        $stable.signature.url -ne $expectedUrls.signature -or
+        $asset.url -ne $expectedUrls.asset -or
+        $stable.trust.xml.url -ne $expectedUrls.xml
+    ) {
+        throw 'stable.json 含非预期不可变下载地址'
+    }
+
+    $manifestPath = Join-Path $work 'release-manifest.json'
+    $signaturePath = Join-Path $work 'release-manifest.sig'
+    $publicKeyPath = Join-Path $work 'release-signing-public-key.xml'
+    $assetPath = Join-Path $work ([string]$asset.name)
+    Save-HttpsFile $stable.manifest.url $manifestPath
+    Save-HttpsFile $stable.signature.url $signaturePath
+    Save-HttpsFile $stable.trust.xml.url $publicKeyPath
+    Save-HttpsFile $asset.url $assetPath
+    Assert-FileRecord $manifestPath $stable.manifest 'release manifest'
+    Assert-FileRecord $signaturePath $stable.signature 'release signature'
+    Assert-FileRecord $publicKeyPath $stable.trust.xml 'release public key'
+    Assert-FileRecord $assetPath $asset 'Windows 安装资产'
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (
+        $manifest.release_state -ne 'stable' -or
+        $manifest.bundle_version -ne $stable.bundle_version -or
+        $manifest.required_signature.algorithm -ne 'RSA-SHA256-PKCS1-v1_5' -or
+        $manifest.required_signature.key_id -ne $ExpectedKeyId
+    ) {
+        throw 'release manifest 的稳定版本或签名合同不匹配'
+    }
+    $assetRecord = $manifest.files | Where-Object { $_.path -eq ('assets/' + $asset.name) }
+    if (
+        @($assetRecord).Count -ne 1 -or
+        $assetRecord.sha256 -ne $asset.sha256 -or
+        [int64]$assetRecord.size -ne [int64]$asset.size
+    ) {
+        throw 'Windows 安装资产未被签名 manifest 唯一绑定'
+    }
+
+    [xml]$keyXml = Get-Content -LiteralPath $publicKeyPath -Raw -Encoding UTF8
+    $parameters = New-Object Security.Cryptography.RSAParameters
+    $parameters.Modulus = [Convert]::FromBase64String($keyXml.RSAKeyValue.Modulus)
+    $parameters.Exponent = [Convert]::FromBase64String($keyXml.RSAKeyValue.Exponent)
+    $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest "https://www.7-zip.org/a/7z2600-x64.exe" -OutFile "$d\7z-setup.exe"
-        Start-Process "$d\7z-setup.exe" -ArgumentList "/S" -Wait
-        Remove-Item "$d\7z-setup.exe" -ErrorAction SilentlyContinue
-        Write-Host "7-Zip 安装完成" -ForegroundColor Green
-    } catch {
-        Write-Host "7-Zip 下载失败，将使用 Windows 资源管理器解压" -ForegroundColor Yellow
+        $rsa.ImportParameters($parameters)
+        $signatureValid = $rsa.VerifyData(
+            [IO.File]::ReadAllBytes($manifestPath),
+            'SHA256',
+            [IO.File]::ReadAllBytes($signaturePath)
+        )
+    } finally {
+        $rsa.Dispose()
     }
-    $7z = @("C:\Program Files\7-Zip\7z.exe","C:\Program Files (x86)\7-Zip\7z.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
-}
+    if (-not $signatureValid) {
+        throw 'release manifest 的 RSA 签名无效'
+    }
 
-# 2. 检测 Obsidian 是否已安装
-$obsidianInstalled = (Test-Path "$env:LOCALAPPDATA\Obsidian\Obsidian.exe") -or (Test-Path "$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe") -or (Test-Path "$env:ProgramFiles\Obsidian\Obsidian.exe")
-$downloadObsidian = $true
-if ($obsidianInstalled) {
-    Write-Host "检测到 Obsidian 已安装" -ForegroundColor Green
-    $downloadObsidian = $false
-} else {
-    $choice = Read-Host "是否需要下载 Obsidian 安装包？(Y/n)"
-    if ($choice -eq 'n' -or $choice -eq 'N') {
-        $downloadObsidian = $false
+    $destinationRootFull = [IO.Path]::GetFullPath($DestinationRoot)
+    [IO.Directory]::CreateDirectory($destinationRootFull) | Out-Null
+    $destination = Join-Path $destinationRootFull ("Obsidian-LLM-Wiki-" + $stable.bundle_version)
+    if (Test-Path -LiteralPath $destination) {
+        throw "目标已存在，拒绝覆盖：$destination"
+    }
+    $staging = Join-Path $destinationRootFull ('.obsidian-wiki-staging-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        Expand-Archive -LiteralPath $assetPath -DestinationPath $staging
+        if (-not (Test-Path -LiteralPath (Join-Path $staging 'setup-win.ps1') -PathType Leaf)) {
+            throw '解压后的安装入口缺失'
+        }
+        Move-Item -LiteralPath $staging -Destination $destination
+    } finally {
+        if (Test-Path -LiteralPath $staging) {
+            $stagingFull = [IO.Path]::GetFullPath($staging)
+            if (-not $stagingFull.StartsWith($destinationRootFull.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw '拒绝清理目标根目录之外的 staging'
+            }
+            Remove-Item -LiteralPath $stagingFull -Recurse -Force
+        }
+    }
+
+    Write-Host "下载、SHA-256 和 RSA 验签完成：$destination" -ForegroundColor Green
+    Write-Host "下一步：powershell -ExecutionPolicy Bypass -File `"$destination\setup-win.ps1`"" -ForegroundColor Yellow
+} finally {
+    $workFull = [IO.Path]::GetFullPath($work)
+    if (Test-Path -LiteralPath $workFull) {
+        if (-not $workFull.StartsWith($tempRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw '拒绝清理系统临时目录之外的下载缓存'
+        }
+        Remove-Item -LiteralPath $workFull -Recurse -Force
     }
 }
-
-# 3. 计算文件数
-$fileCount = 3
-if ($downloadObsidian) { $fileCount = 6 }
-
-# 4. 下载
-Write-Host "正在下载安装包（共${fileCount}个文件）..." -ForegroundColor Yellow
-$base = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v2.1"
-$baseObs = "https://gitee.com/jiegeng333/obsidian-wiki-setup/releases/download/v1.8"
-$idx = 1
-
-Invoke-WebRequest "$base/obsidian-wiki-v2.1-part1.zip" -OutFile "part1.zip"
-Write-Host "  [$idx/$fileCount] part1.zip 完成" -ForegroundColor Green; $idx++
-Invoke-WebRequest "$base/obsidian-wiki-v2.1-part2.zip" -OutFile "part2.zip"
-Write-Host "  [$idx/$fileCount] part2.zip 完成" -ForegroundColor Green; $idx++
-Invoke-WebRequest "$base/obsidian-wiki-v2.1-part3.zip" -OutFile "part3.zip"
-Write-Host "  [$idx/$fileCount] part3.zip 完成" -ForegroundColor Green; $idx++
-if ($downloadObsidian) {
-    1..3 | ForEach-Object {
-        Invoke-WebRequest "$baseObs/Obsidian-win-part$_.bin" -OutFile "Obsidian-win-part$_.bin"
-        Write-Host "  [$idx/$fileCount] Obsidian-win-part$_.bin 完成" -ForegroundColor Green; $script:idx++
-    }
-}
-
-# 5. 解压
-Write-Host "正在解压..." -ForegroundColor Yellow
-if (Test-Path $7z) {
-    & $7z x -pwiki2026 -o"$d\install" -y part1.zip | Out-Null
-    & $7z x -pwiki2026 -o"$d\install" -y part2.zip | Out-Null
-    & $7z x -pwiki2026 -o"$d\install" -y part3.zip | Out-Null
-    Write-Host "解压完成" -ForegroundColor Green
-} else {
-    Write-Host "请手动解压 C:\OB 下的 part1.zip / part2.zip / part3.zip" -ForegroundColor Yellow
-    Write-Host "  密码: wiki2026" -ForegroundColor Yellow
-    Write-Host "  解压到 C:\OB\install 文件夹" -ForegroundColor Yellow
-    Write-Host ""
-    Read-Host "解压完成后按回车继续"
-}
-
-# 6. 合并 Obsidian 分片
-if ($downloadObsidian) {
-    Write-Host "正在合并 Obsidian 安装包..." -ForegroundColor Yellow
-    mkdir "$d\install\installers" -Force | Out-Null
-    $out = [System.IO.File]::Create("$d\install\installers\Obsidian-1.12.7.exe")
-    1..3 | ForEach-Object {
-        $bytes = [System.IO.File]::ReadAllBytes("$d\Obsidian-win-part$_.bin")
-        $out.Write($bytes, 0, $bytes.Length)
-    }
-    $out.Close()
-    Write-Host "合并完成" -ForegroundColor Green
-}
-
-# 7. 清理
-Remove-Item part1.zip, part2.zip, part3.zip -Force -ErrorAction SilentlyContinue
-Remove-Item Obsidian-win-part1.bin, Obsidian-win-part2.bin, Obsidian-win-part3.bin -Force -ErrorAction SilentlyContinue
-
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Green
-Write-Host "  全部完成！" -ForegroundColor Green
-Write-Host "============================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "请进入 $d\install 双击 install.bat 开始安装" -ForegroundColor Yellow
-Write-Host ""
-Read-Host "按回车退出"

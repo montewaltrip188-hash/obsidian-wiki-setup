@@ -25,7 +25,7 @@
     "gates": {"type": "object"},
     "manifest_format": {"const": 1},
     "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "release_state": {"const": "unreleased_candidate"},
+    "release_state": {"enum": ["unreleased_candidate", "stable"]},
     "required_signature": {
       "type": "object",
       "additionalProperties": false,

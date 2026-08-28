@@ -37,7 +37,8 @@ def sha256(path: Path) -> str:
 
 
 def make_three_repositories(
-    root: Path, *, runtime_ready: bool = False, bundle_version: str | None = None
+    root: Path, *, runtime_ready: bool = False, bundle_version: str | None = None,
+    release_state: str = "unreleased_candidate",
 ):
     skill_files = {
         "VERSION": "2.1.0\n",
@@ -49,7 +50,7 @@ def make_three_repositories(
                 "contract_format": 1,
                 "runtime_id": "claudecode-wiki-skills",
                 "runtime_version": "2.1.0",
-                "release_state": "unreleased_candidate",
+                "release_state": release_state,
                 "supports": [
                     {
                         "product_id": "obsidian-llm-wiki-template",
@@ -96,6 +97,7 @@ def make_three_repositories(
     release = json.loads(installer_files["release/bundle-release.json"])
     release["wiki_skills_version"] = "2.1.0"
     release["bundle_version"] = bundle_version
+    release["release_state"] = release_state
     installer_files["release/bundle-release.json"] = json.dumps(release) + "\n"
     runtime_bom = json.loads(installer_files["contracts/offline-keyword-runtime-bom.json"])
     lifecycle_defaults = {
@@ -182,6 +184,28 @@ class ReleaseOrchestratorTests(unittest.TestCase):
             self.assertEqual(
                 ["windows-x64", "macos-x64", "macos-arm64"], gate["targets"]
             )
+
+    def test_stable_bundle_advances_to_d3_run_approval_without_downgrading_state(self):
+        with tempfile.TemporaryDirectory(prefix="d3-orchestrator-stable-") as temporary:
+            root = Path(temporary)
+            repositories = make_three_repositories(
+                root,
+                runtime_ready=True,
+                bundle_version="2.1.0",
+                release_state="stable",
+            )
+            planned = run_cli(
+                "plan",
+                "--product-repo", repositories["product"][0],
+                "--product-ref", repositories["product"][1],
+                "--skill-repo", repositories["skill"][0],
+                "--skill-ref", repositories["skill"][1],
+                "--installer-repo", repositories["installer"][0],
+                "--installer-ref", repositories["installer"][1],
+                "--workspace", root / "workspace",
+            )
+            self.assertEqual("stable", planned["release_state"])
+            self.assertEqual("run_approval_required", planned["next_action"])
 
     def test_plan_freezes_fresh_clones_and_reproducible_two_platform_candidates(self):
         with tempfile.TemporaryDirectory(prefix="d2-orchestrator-") as temporary:

@@ -9,12 +9,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class D3ContractTests(unittest.TestCase):
-    def test_bundle_version_is_assigned_without_marking_stable(self):
+    def test_bundle_version_is_assigned_and_marked_stable(self):
         release = json.loads(
             (ROOT / "release" / "bundle-release.json").read_text(encoding="utf-8")
         )
         self.assertEqual("2.1.0", release["bundle_version"])
-        self.assertEqual("unreleased_candidate", release["release_state"])
+        self.assertEqual("stable", release["release_state"])
 
     def test_d3_schemas_close_receipt_manifest_and_signature_contracts(self):
         receipt = json.loads(
@@ -38,6 +38,10 @@ class D3ContractTests(unittest.TestCase):
             receipt["properties"]["receipt_type"]["const"],
         )
         self.assertIn("required_signature", manifest["required"])
+        self.assertEqual(
+            ["unreleased_candidate", "stable"],
+            manifest["properties"]["release_state"]["enum"],
+        )
         self.assertEqual(
             "RSA-SHA256-PKCS1-v1_5",
             manifest["properties"]["required_signature"]["properties"]["algorithm"]["const"],

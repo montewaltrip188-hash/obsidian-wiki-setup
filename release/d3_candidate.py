@@ -92,7 +92,7 @@ def validate_release_plan(plan: dict) -> None:
         plan.get("orchestrator_format") != 1
         or plan.get("status") != "planned"
         or plan.get("next_action") != "run_approval_required"
-        or plan.get("release_state") != "unreleased_candidate"
+        or plan.get("release_state") not in {"unreleased_candidate", "stable"}
         or plan.get("bundle_version") != "2.1.0"
         or runtime_gate.get("status") != "ready"
         or runtime_gate.get("automatic_network_install") is not False
@@ -177,7 +177,7 @@ def preflight(release_plan_path: Path, candidate: Path, target: str) -> dict:
             or manifest.get("candidate_id") != candidate_id
             or bundle.get("candidate_id") != candidate_id
             or bundle.get("bundle_version") != plan.get("bundle_version")
-            or bundle.get("release_state") != "unreleased_candidate"
+            or bundle.get("release_state") != plan.get("release_state")
             or components.get("installer", {}).get("commit") != sources.get("installer", {}).get("commit")
             or components.get("product", {}).get("commit") != sources.get("product", {}).get("commit")
             or components.get("wiki_skills", {}).get("commit") != sources.get("skill", {}).get("commit")

@@ -336,7 +336,7 @@ def prepare(args: argparse.Namespace) -> dict:
             },
             "manifest_format": 1,
             "plan_id": plan["plan_id"],
-            "release_state": "unreleased_candidate",
+            "release_state": plan["release_state"],
             "required_signature": {
                 "algorithm": SIGNATURE_ALGORITHM,
                 "file": "release-manifest.sig",
@@ -403,7 +403,7 @@ def verify(args: argparse.Namespace) -> dict:
         manifest.get("manifest_format") != 1
         or manifest.get("bundle_version") != "2.1.0"
         or not HEX64.fullmatch(str(manifest.get("plan_id", "")))
-        or manifest.get("release_state") != "unreleased_candidate"
+        or manifest.get("release_state") not in {"unreleased_candidate", "stable"}
         or not isinstance(manifest.get("required_signature"), dict)
         or manifest["required_signature"].get("algorithm") != SIGNATURE_ALGORITHM
         or manifest["required_signature"].get("file") != "release-manifest.sig"
@@ -495,6 +495,7 @@ def verify(args: argparse.Namespace) -> dict:
     if (
         plan.get("plan_id") != manifest["plan_id"]
         or plan.get("bundle_version") != manifest["bundle_version"]
+        or plan.get("release_state") != manifest["release_state"]
         or plan.get("sources") != manifest["sources"]
     ):
         raise D3Error("D3_RELEASE_PLAN_MISMATCH")

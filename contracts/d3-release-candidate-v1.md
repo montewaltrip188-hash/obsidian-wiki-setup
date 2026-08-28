@@ -1,6 +1,6 @@
 # D3 发布候选合同 v1
 
-D3 只接受已获人工批准版本的 D2 计划：`bundle_version` 必须为 `2.1.0`，`release_state` 仍为 `unreleased_candidate`，`next_action` 必须为 `run_approval_required`。D3 不 tag、push、创建 Release 或切换 stable。
+D3 只接受已获人工批准版本的 D2 计划：`bundle_version` 必须为 `2.1.0`，`release_state` 只能是 `unreleased_candidate` 或 `stable`，`next_action` 必须为 `run_approval_required`。候选态用于预发布验收；最终发布必须从三仓已经固化 stable 合同的精确提交重新构建，并要求计划、候选根 `bundle-manifest.json` 和签名 manifest 的状态一致，禁止原地改写旧候选冒充 stable。D3 本身不 tag、push、创建 Release 或切换 stable。
 
 ## 真机公共接缝
 
@@ -16,4 +16,4 @@ D3 只接受已获人工批准版本的 D2 计划：`bundle_version` 必须为 `
 
 ## 停机门禁
 
-任一候选漂移、回执 seal 失效、架构不匹配、Query/事务/回滚失败、GitHub artifact attestation 无法验证、生产公钥尚未确定、签名私钥风险或对外版本语义变化，都必须停止。仅当三平台回执、两份 macOS 证明、10 个文件摘要和生产 RSA 签名全部闭合，D3 才能报告发布候选验收完成；此状态仍不授权 tag、push、Release 或 stable。
+任一候选漂移、状态不一致、回执 seal 失效、架构不匹配、Query/事务/回滚失败、GitHub artifact attestation 无法验证、生产公钥尚未确定、签名私钥风险或对外版本语义变化，都必须停止。仅当三平台回执、两份 macOS 证明、10 个文件摘要和生产 RSA 签名全部闭合，D3 才能报告验收完成：`unreleased_candidate` 只证明预发布候选通过，仍不授权 tag、push、Release 或 stable；`stable` 证明当前精确来源可发布，但客户可见的 `stable.json` 仍只能在不可变 tag 与 Release 资产完成后原子切换。

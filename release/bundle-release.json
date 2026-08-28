@@ -1,6 +1,6 @@
 {
   "manifest_format": 1,
-  "release_state": "unreleased_candidate",
+  "release_state": "stable",
   "bundle_version": "2.1.0",
   "product_schema_version": "1.0.0",
   "wiki_skills_version": "2.1.0",

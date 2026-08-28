@@ -43,7 +43,7 @@ def run_cli(*args: object, expected: int = 0) -> dict:
 
 
 def write_fixture(
-    root: Path, target: str = "macos-arm64"
+    root: Path, target: str = "macos-arm64", release_state: str = "unreleased_candidate"
 ) -> tuple[Path, Path]:
     platform_name = "windows" if target == "windows-x64" else "macos"
     interpreter = (
@@ -59,7 +59,7 @@ def write_fixture(
             "wiki_skills": {"commit": "3" * 40},
         },
         "manifest_format": 1,
-        "release_state": "unreleased_candidate",
+        "release_state": release_state,
     }
     descriptor = {
         "interpreter": interpreter,
@@ -121,7 +121,7 @@ def write_fixture(
                 "targets": ["windows-x64", "macos-x64", "macos-arm64"],
             }
         },
-        "release_state": "unreleased_candidate",
+        "release_state": release_state,
         "sources": {
             "installer": {"commit": "1" * 40},
             "product": {"commit": "2" * 40},
@@ -198,6 +198,19 @@ class D3CandidateTests(unittest.TestCase):
 
             self.assertEqual("ready", ready["status"])
             self.assertEqual("windows-x64", ready["target"])
+
+    def test_stable_preflight_requires_plan_and_candidate_state_to_match(self):
+        with tempfile.TemporaryDirectory(prefix="d3-stable-preflight-") as temporary:
+            release_plan, candidate = write_fixture(
+                Path(temporary), release_state="stable"
+            )
+            ready = run_cli(
+                "preflight",
+                "--release-plan", release_plan,
+                "--candidate", candidate,
+                "--target", "macos-arm64",
+            )
+            self.assertEqual("ready", ready["status"])
 
     @unittest.skipIf(sys.platform == "darwin", "仅验证非 macOS 主机拒绝路径")
     def test_macos_run_rejects_non_macos_host_before_extraction(self):

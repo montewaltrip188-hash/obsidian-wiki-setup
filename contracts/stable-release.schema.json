@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/stable-release.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assets", "bundle_version", "channel", "manifest", "pointer_format", "release_state", "repository", "signature", "tag", "trust"],
+  "properties": {
+    "pointer_format": {"const": 1},
+    "channel": {"const": "stable"},
+    "bundle_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "release_state": {"const": "stable"},
+    "repository": {"const": "montewaltrip188-hash/obsidian-wiki-setup"},
+    "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "manifest": {"$ref": "#/$defs/file"},
+    "signature": {"$ref": "#/$defs/file"},
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "pem", "xml"],
+      "properties": {
+        "key_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "pem": {"$ref": "#/$defs/file"},
+        "xml": {"$ref": "#/$defs/file"}
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["macos-universal", "windows-x64"],
+      "properties": {
+        "macos-universal": {"$ref": "#/$defs/file"},
+        "windows-x64": {"$ref": "#/$defs/file"}
+      }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "size", "url"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size": {"type": "integer", "minimum": 1},
+        "url": {"type": "string", "pattern": "^https://"}
+      }
+    }
+  }
+}

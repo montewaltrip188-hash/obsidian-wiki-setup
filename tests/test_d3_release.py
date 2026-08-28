@@ -50,7 +50,12 @@ def run_cli(*args: object, expected: int = 0, environment: dict | None = None) -
     return json.loads(completed.stdout if expected == 0 else completed.stderr)
 
 
-def candidate(path: Path, candidate_id: str, platform_name: str) -> None:
+def candidate(
+    path: Path,
+    candidate_id: str,
+    platform_name: str,
+    release_state: str = "unreleased_candidate",
+) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
             "bundle-manifest.json",
@@ -58,7 +63,7 @@ def candidate(path: Path, candidate_id: str, platform_name: str) -> None:
                 {
                     "bundle_version": "2.1.0",
                     "candidate_id": candidate_id,
-                    "release_state": "unreleased_candidate",
+                    "release_state": release_state,
                 }
             ),
         )
@@ -123,14 +128,16 @@ def receipt(
     path.write_text(json.dumps(sealed(payload)), encoding="utf-8")
 
 
-def fixture(root: Path) -> tuple[Path, dict[str, Path]]:
+def fixture(
+    root: Path, release_state: str = "unreleased_candidate"
+) -> tuple[Path, dict[str, Path]]:
     workspace = root / "d2"
     (workspace / "candidates" / "windows" / "first").mkdir(parents=True)
     (workspace / "candidates" / "macos" / "first").mkdir(parents=True)
     windows = workspace / "candidates" / "windows" / "first" / "candidate.zip"
     macos = workspace / "candidates" / "macos" / "first" / "candidate.zip"
-    candidate(windows, "a" * 64, "windows")
-    candidate(macos, "b" * 64, "macos")
+    candidate(windows, "a" * 64, "windows", release_state)
+    candidate(macos, "b" * 64, "macos", release_state)
     payload = {
         "bundle_version": "2.1.0",
         "candidates": {
@@ -162,7 +169,7 @@ def fixture(root: Path) -> tuple[Path, dict[str, Path]]:
                 "targets": ["windows-x64", "macos-x64", "macos-arm64"],
             }
         },
-        "release_state": "unreleased_candidate",
+        "release_state": release_state,
         "sources": {
             "installer": {"commit": "1" * 40},
             "product": {"commit": "2" * 40},
@@ -224,7 +231,7 @@ class D3ReleaseTests(unittest.TestCase):
     def test_prepare_sign_and_verify_release_candidate_assets(self):
         with tempfile.TemporaryDirectory(prefix="d3-release-") as temporary:
             root = Path(temporary)
-            release_plan, receipts = fixture(root)
+            release_plan, receipts = fixture(root, release_state="stable")
             release_dir = root / "release-candidate"
             macos_x64_attestation = root / "macos-x64-attestation.sigstore.json"
             macos_arm64_attestation = root / "macos-arm64-attestation.sigstore.json"
@@ -274,6 +281,10 @@ class D3ReleaseTests(unittest.TestCase):
             self.assertEqual("prepared", prepared["status"])
             self.assertEqual("signature_required", prepared["next_action"])
             manifest = release_dir / "release-manifest.json"
+            self.assertEqual(
+                "stable",
+                json.loads(manifest.read_text(encoding="utf-8"))["release_state"],
+            )
             pwsh(
                 "-File", SIGN,
                 "-ManifestPath", manifest,
