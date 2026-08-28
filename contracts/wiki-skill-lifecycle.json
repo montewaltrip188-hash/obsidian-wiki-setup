@@ -48,7 +48,8 @@
       "before",
       "after",
       "package_fingerprint",
-      "entries_fingerprint"
+      "entries_fingerprint",
+      "generation"
     ],
     "current_state_requirement": "must_equal_receipt_after_state",
     "unchanged_transaction": "no_op",
@@ -77,10 +78,12 @@
       "released_at"
     ],
     "stale_recovery": "automatic_on_process_exit",
-    "active_lock_policy": "never_break_by_timeout"
+    "active_lock_policy": "never_break_by_timeout",
+    "release_audit_failure": "best_effort_result_warning"
   },
   "ownership": {
     "state": "~/.agents/packages/claudecode-wiki-skills/state.json",
+    "install_generation": "persistent_transaction_id",
     "version_manifest": ".wiki-skill-install.json",
     "runtime_aliases": "logical_runtime_to_owned_root",
     "owned_roots": "one_entry_set_per_physical_root",

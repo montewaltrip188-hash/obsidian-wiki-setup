@@ -35,6 +35,7 @@ class MutationLock:
         self.path = self.home / ".agents" / "locks" / f"{PACKAGE_NAME}.lock"
         self.owner_id = uuid.uuid4().hex
         self.stream = None
+        self.audit_error = None
 
     @staticmethod
     def _lock_stream(stream):
@@ -145,23 +146,29 @@ class MutationLock:
             raise
 
     def __exit__(self, exc_type, exc_value, traceback):
-        release_error = None
         try:
             metadata = self._read_metadata()
             if not metadata or metadata.get("owner_id") != self.owner_id:
-                release_error = LifecycleError("INSTALL_TRANSACTION_LOCK_OWNERSHIP_LOST")
+                raise LifecycleError("INSTALL_TRANSACTION_LOCK_OWNERSHIP_LOST")
             else:
                 metadata["released_at"] = datetime.now(timezone.utc).isoformat()
                 metadata["released_unix"] = time.time()
+                if (
+                    os.environ.get(
+                        "WIKI_SKILL_TEST_FORCE_LOCK_RELEASE_AUDIT_FAILURE"
+                    )
+                    == "1"
+                ):
+                    raise OSError("forced lock release audit failure")
                 self._write_metadata(metadata)
-        except Exception as error:
-            release_error = error
+        except Exception:
+            # 事务结果已在内核锁保护下提交。释放审计只能 best effort；
+            # 不能在提交后把成功伪装成失败，使调用方拿不到 undo receipt。
+            self.audit_error = "LOCK_RELEASE_AUDIT_WRITE_FAILED"
         finally:
             self._unlock_stream(self.stream)
             self.stream.close()
             self.stream = None
-        if release_error is not None and exc_type is None:
-            raise release_error
         return False
 
 
@@ -173,6 +180,12 @@ def capability_receipt(skill_installed):
         "keyword_runtime_error": KEYWORD_RUNTIME_ERROR,
         "vector_capability": "optional",
     }
+
+
+def attach_lock_audit(result, transaction):
+    if transaction.audit_error:
+        result["lock_audit_error"] = transaction.audit_error
+    return result
 
 
 def make_parser():
@@ -265,11 +278,15 @@ def json_fingerprint(payload):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def managed_snapshot(home):
-    """返回可由回执绑定的完整受管状态；已安装状态必须先通过验收。"""
+def raw_managed_snapshot(home):
+    """不调用公共 verify，直接重算回执所绑定的全部原始状态。"""
     home = home.absolute()
     package = home / ".agents" / "packages" / PACKAGE_NAME
     state_path = package / "state.json"
+    actual_roots, actual_aliases = detect_runtime_layout(home)
+    actual_owned_roots = {
+        owner: str(root) for owner, root in actual_roots.items()
+    }
     if not state_path.exists():
         if package.exists():
             raise LifecycleError("发现无状态包目录，拒绝生成事务快照")
@@ -279,9 +296,11 @@ def managed_snapshot(home):
             "state": None,
             "package_fingerprint": None,
             "entries_fingerprint": None,
+            "runtime_aliases": actual_aliases,
+            "owned_roots": actual_owned_roots,
+            "generation": None,
         }
 
-    verify(argparse.Namespace(home=home))
     _, _, state = load_state(home)
     entries = {}
     for owner, configured in state["entries"].items():
@@ -302,7 +321,19 @@ def managed_snapshot(home):
         "state": state,
         "package_fingerprint": json_fingerprint(inventory(package)),
         "entries_fingerprint": json_fingerprint(entries),
+        "runtime_aliases": actual_aliases,
+        "owned_roots": actual_owned_roots,
+        "generation": state.get("install_generation"),
     }
+
+
+def managed_snapshot(home):
+    """返回可由回执绑定的完整受管状态；安装路径仍必须先通过公共验收。"""
+    home = home.absolute()
+    package = home / ".agents" / "packages" / PACKAGE_NAME
+    if (package / "state.json").exists():
+        verify(argparse.Namespace(home=home))
+    return raw_managed_snapshot(home)
 
 
 def write_undo_receipt(home, transaction_id, action, changed, before, after):
@@ -519,7 +550,8 @@ def install(args):
     package = home / ".agents" / "packages" / PACKAGE_NAME
     ensure_windows_path_budget(source, package / "versions", version)
     with MutationLock(home, "install") as transaction:
-        return install_locked(args, transaction.owner_id)
+        result = install_locked(args, transaction.owner_id)
+    return attach_lock_audit(result, transaction)
 
 
 def install_locked(args, transaction_id):
@@ -629,6 +661,7 @@ def install_locked(args, transaction_id):
         state = {
             "schema_version": 1,
             "package": PACKAGE_NAME,
+            "install_generation": transaction_id,
             "active_version": plan["version"],
             "previous_versions": (
                 [
@@ -697,6 +730,8 @@ def verify(args):
         raise LifecycleError("TEST_FORCED_VERIFY_FAILURE")
     home = args.home.absolute()
     package, state_path, state = load_state(home)
+    if not re.fullmatch(r"[0-9a-f]{32}", str(state.get("install_generation", ""))):
+        raise LifecycleError("安装 generation 合同不兼容")
     version_root = package / "versions" / state["active_version"]
     manifest_path = version_root / ".wiki-skill-install.json"
     if not manifest_path.is_file():
@@ -755,8 +790,9 @@ def verify(args):
 
 
 def rollback(args):
-    with MutationLock(args.home.absolute(), "rollback"):
-        return rollback_locked(args)
+    with MutationLock(args.home.absolute(), "rollback") as transaction:
+        result = rollback_locked(args)
+    return attach_lock_audit(result, transaction)
 
 
 def rollback_locked(args):
@@ -819,8 +855,9 @@ def rollback_locked(args):
 
 
 def uninstall(args):
-    with MutationLock(args.home.absolute(), "uninstall"):
-        return uninstall_locked(args)
+    with MutationLock(args.home.absolute(), "uninstall") as transaction:
+        result = uninstall_locked(args)
+    return attach_lock_audit(result, transaction)
 
 
 def uninstall_locked(args):
@@ -855,16 +892,17 @@ def uninstall_locked(args):
 
 def undo(args):
     home = args.home.absolute()
-    with MutationLock(home, "undo"):
-        return undo_locked(args)
+    with MutationLock(home, "undo") as transaction:
+        result = undo_locked(args)
+    return attach_lock_audit(result, transaction)
 
 
 def undo_locked(args):
     home = args.home.absolute()
     receipt = load_undo_receipt(args.receipt.absolute(), home)
     try:
-        current = managed_snapshot(home)
-    except LifecycleError as error:
+        current = raw_managed_snapshot(home)
+    except (LifecycleError, OSError, KeyError, TypeError) as error:
         raise LifecycleError(f"UNDO_AFTER_STATE_DRIFT: {error}") from error
     if current != receipt["after"]:
         raise LifecycleError("UNDO_AFTER_STATE_DRIFT")
@@ -898,7 +936,7 @@ def undo_fresh_locked(home, receipt):
                 destination = root / name
                 remove_owned_entry(destination, ownership["mode"])
                 removed.append((destination, ownership))
-        if managed_snapshot(home) != receipt["before"]:
+        if raw_managed_snapshot(home) != receipt["before"]:
             raise LifecycleError("UNDO_BEFORE_STATE_MISMATCH")
         shutil.rmtree(package_backup)
     except Exception:
@@ -997,7 +1035,7 @@ def undo_upgrade_locked(home, receipt):
         restored_state["entries"] = entries
         atomic_json(state_path, restored_state)
         after_root.replace(version_backup)
-        if managed_snapshot(home) != before:
+        if raw_managed_snapshot(home) != before:
             raise LifecycleError("UNDO_BEFORE_STATE_MISMATCH")
         shutil.rmtree(version_backup)
     except Exception:

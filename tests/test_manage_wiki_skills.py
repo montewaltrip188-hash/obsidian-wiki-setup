@@ -285,6 +285,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
                 "after",
                 "package_fingerprint",
                 "entries_fingerprint",
+                "generation",
             ],
             contract["undo"]["bindings"],
         )
@@ -292,6 +293,14 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual(
             "must_equal_receipt_after_state",
             contract["undo"]["current_state_requirement"],
+        )
+        self.assertEqual(
+            "persistent_transaction_id",
+            contract["ownership"]["install_generation"],
+        )
+        self.assertEqual(
+            "best_effort_result_warning",
+            contract["transaction_lock"]["release_audit_failure"],
         )
 
     def test_unsafe_version_cannot_escape_version_directory(self):
@@ -377,6 +386,78 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         ):
             for name in CORE:
                 self.assertFalse((runtime / name).exists())
+
+    def test_consumed_receipt_cannot_remove_later_identical_install(self):
+        first = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        self.run_cli(
+            "undo", "--home", self.home, "--receipt", first["undo_receipt"]
+        )
+        second = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        self.assertNotEqual(first["transaction_id"], second["transaction_id"])
+
+        replay = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            first["undo_receipt"],
+            expected=2,
+        )
+
+        self.assertIn("UNDO_AFTER_STATE_DRIFT", replay["error"])
+        verified = self.run_cli("verify", "--home", self.home)
+        self.assertEqual("verified", verified["status"])
+        state = json.loads(
+            (
+                self.home
+                / ".agents"
+                / "packages"
+                / "claudecode-wiki-skills"
+                / "state.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(second["transaction_id"], state["install_generation"])
+
+    def test_lock_release_audit_failure_keeps_success_result_and_unlocks(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(CLI),
+                "install",
+                "--source",
+                str(self.source),
+                "--home",
+                str(self.home),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env={
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "WIKI_SKILL_TEST_FORCE_LOCK_RELEASE_AUDIT_FAILURE": "1",
+            },
+        )
+
+        self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+        result = json.loads(completed.stdout)
+        self.assertEqual("installed", result["status"])
+        self.assertEqual(
+            "LOCK_RELEASE_AUDIT_WRITE_FAILED", result["lock_audit_error"]
+        )
+        self.assertTrue(Path(result["undo_receipt"]).is_file())
+        self.assertEqual(
+            "verified", self.run_cli("verify", "--home", self.home)["status"]
+        )
+        follower = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        self.assertEqual("already_installed", follower["status"])
 
     def test_receipt_write_failure_reverts_install_in_same_transaction(self):
         receipt_parent = self.home / ".agents" / "receipts"
@@ -535,6 +616,54 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         )
 
         self.assertEqual("undone", restored["status"])
+        self.assertFalse(
+            (
+                self.home
+                / ".agents"
+                / "packages"
+                / "claudecode-wiki-skills"
+            ).exists()
+        )
+
+    def test_persistent_public_verify_failure_does_not_block_receipt_bound_undo(self):
+        installed = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        persistent_failure_env = {
+            **os.environ,
+            "PYTHONUTF8": "1",
+            "WIKI_SKILL_TEST_FORCE_VERIFY_FAILURE": "1",
+        }
+        verification = subprocess.run(
+            [sys.executable, str(CLI), "verify", "--home", str(self.home)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env=persistent_failure_env,
+        )
+        self.assertEqual(2, verification.returncode, verification.stdout)
+        self.assertIn("TEST_FORCED_VERIFY_FAILURE", verification.stderr)
+
+        undone = subprocess.run(
+            [
+                sys.executable,
+                str(CLI),
+                "undo",
+                "--home",
+                str(self.home),
+                "--receipt",
+                installed["undo_receipt"],
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env=persistent_failure_env,
+        )
+
+        self.assertEqual(0, undone.returncode, undone.stderr or undone.stdout)
+        self.assertEqual("undone", json.loads(undone.stdout)["status"])
         self.assertFalse(
             (
                 self.home
