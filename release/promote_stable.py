@@ -171,11 +171,10 @@ def main() -> int:
         if output.exists():
             raise PromoteError("STABLE_OUTPUT_EXISTS")
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(pointer, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        with output.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(
+                json.dumps(pointer, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            )
         print(
             json.dumps(
                 {

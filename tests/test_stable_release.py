@@ -64,6 +64,33 @@ def parse_rsa_spki(pem_path: Path) -> tuple[bytes, int]:
 
 
 class StableReleaseTests(unittest.TestCase):
+    def test_promoter_cli_writes_pointer_with_python_39_compatible_create_only_io(self):
+        pointer = {
+            "bundle_version": "2.1.0",
+            "manifest": {"sha256": "a" * 64},
+            "tag": "v2.1.0",
+        }
+        with tempfile.TemporaryDirectory(prefix="stable-pointer-cli-") as temporary:
+            output = Path(temporary) / "stable.json"
+            argv = [
+                "promote_stable.py",
+                "--release-dir",
+                temporary,
+                "--tag",
+                "v2.1.0",
+                "--output",
+                str(output),
+            ]
+            with mock.patch.object(promote_stable, "build_pointer", return_value=pointer), mock.patch.object(
+                sys, "argv", argv
+            ):
+                self.assertEqual(0, promote_stable.main())
+            self.assertEqual(pointer, json.loads(output.read_text(encoding="utf-8")))
+            with mock.patch.object(promote_stable, "build_pointer", return_value=pointer), mock.patch.object(
+                sys, "argv", argv
+            ):
+                self.assertEqual(2, promote_stable.main())
+
     def test_public_pem_xml_and_downloaders_pin_the_same_production_key(self):
         pem = ROOT / "release" / "release-signing-public-key.pem"
         xml = ROOT / "release" / "release-signing-public-key.xml"
