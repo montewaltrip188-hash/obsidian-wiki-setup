@@ -428,17 +428,19 @@ step "安装 Wiki Skills..."
         red "  Wiki Skill 安装失败: $SKILL_INSTALL"
         exit 1
     fi
+    if ! SKILL_UNDO_RECEIPT=$(printf '%s' "$SKILL_INSTALL" | "$PYTHON_BIN" -c \
+        'import json,sys; print(json.load(sys.stdin)["undo_receipt"])'); then
+        red "  Wiki Skill 安装输出缺少事务恢复回执，需要人工处理"
+        exit 1
+    fi
+    if [ -z "$SKILL_UNDO_RECEIPT" ]; then
+        red "  Wiki Skill 安装输出缺少事务恢复回执，需要人工处理"
+        exit 1
+    fi
     if ! SKILL_VERIFY=$("$PYTHON_BIN" "$SKILL_MANAGER" verify --home "$HOME" 2>&1); then
         red "  Wiki Skill 验收失败: $SKILL_VERIFY"
-        RESTORE_COMMAND=""
-        case "$SKILL_ACTION" in
-            install) RESTORE_COMMAND="uninstall" ;;
-            upgrade) RESTORE_COMMAND="rollback" ;;
-        esac
-        if [ -n "$RESTORE_COMMAND" ]; then
-            if ! "$PYTHON_BIN" "$SKILL_MANAGER" "$RESTORE_COMMAND" --home "$HOME" >/dev/null; then
-                red "  Wiki Skill 验收失败，自动恢复也失败，需要人工处理"
-            fi
+        if ! "$PYTHON_BIN" "$SKILL_MANAGER" undo --home "$HOME" --receipt "$SKILL_UNDO_RECEIPT" >/dev/null; then
+            red "  Wiki Skill 验收失败，回执绑定恢复也失败，需要人工处理"
         fi
         exit 1
     fi
@@ -475,15 +477,8 @@ step "安装 Wiki Skills..."
     else
         DEPLOY_EXIT=$?
         red "  Vault 部署失败: $DEPLOY_OUTPUT"
-        RESTORE_COMMAND=""
-        case "$SKILL_ACTION" in
-            install) RESTORE_COMMAND="uninstall" ;;
-            upgrade) RESTORE_COMMAND="rollback" ;;
-        esac
-        if [ -n "$RESTORE_COMMAND" ]; then
-            if ! "$PYTHON_BIN" "$SKILL_MANAGER" "$RESTORE_COMMAND" --home "$HOME" >/dev/null; then
-                red "  Vault 部署失败，Wiki Skill 自动恢复也失败，需要人工处理"
-            fi
+        if ! "$PYTHON_BIN" "$SKILL_MANAGER" undo --home "$HOME" --receipt "$SKILL_UNDO_RECEIPT" >/dev/null; then
+            red "  Vault 部署失败，Wiki Skill 回执绑定恢复也失败，需要人工处理"
         fi
         exit "$DEPLOY_EXIT"
     fi

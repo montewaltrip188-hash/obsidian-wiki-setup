@@ -424,21 +424,19 @@ Write-Step "安装 Wiki Skills..."
         exit $LASTEXITCODE
     }
     $skillInstall = ($skillInstallOutput -join [Environment]::NewLine) | ConvertFrom-Json
+    $skillUndoReceipt = [string]$skillInstall.undo_receipt
+    if ([string]::IsNullOrWhiteSpace($skillUndoReceipt)) {
+        Write-Host "  [!] Wiki Skill 安装输出缺少事务恢复回执，需要人工处理" -ForegroundColor Red
+        exit 1
+    }
     $skillVerifyOutput = & $pythonCommand.Source $skillManager verify `
         --home $env:USERPROFILE 2>&1
     if ($LASTEXITCODE -ne 0) {
         $verifyExit = $LASTEXITCODE
         Write-Host "  [!] Wiki Skill 验收失败：$($skillVerifyOutput -join ' ')" -ForegroundColor Red
-        $restoreCommand = switch ($skillPlan.action) {
-            "install" { "uninstall" }
-            "upgrade" { "rollback" }
-            default { $null }
-        }
-        if ($restoreCommand) {
-            & $pythonCommand.Source $skillManager $restoreCommand --home $env:USERPROFILE | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "  [!] Wiki Skill 验收失败，自动恢复也失败，需要人工处理" -ForegroundColor Red
-            }
+        & $pythonCommand.Source $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [!] Wiki Skill 验收失败，回执绑定恢复也失败，需要人工处理" -ForegroundColor Red
         }
         exit $verifyExit
     }
@@ -462,16 +460,9 @@ Write-Step "安装 Wiki Skills..."
     $deployExit = $LASTEXITCODE
     if ($deployExit -ne 0) {
         Write-Host "  [!] Vault 部署失败：$($deployOutput -join ' ')" -ForegroundColor Red
-        $restoreCommand = switch ($skillPlan.action) {
-            "install" { "uninstall" }
-            "upgrade" { "rollback" }
-            default { $null }
-        }
-        if ($restoreCommand) {
-            & $pythonCommand.Source $skillManager $restoreCommand --home $env:USERPROFILE | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "  [!] Vault 部署失败，Wiki Skill 自动恢复也失败，需要人工处理" -ForegroundColor Red
-            }
+        & $pythonCommand.Source $skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [!] Vault 部署失败，Wiki Skill 回执绑定恢复也失败，需要人工处理" -ForegroundColor Red
         }
         exit $deployExit
     }

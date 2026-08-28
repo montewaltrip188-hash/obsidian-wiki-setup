@@ -499,8 +499,8 @@ class SafeDeployTests(unittest.TestCase):
             self.assertIn("claudecode-wiki-skills", content, label)
             self.assertRegex(content, r"\binstall\b", label)
             self.assertRegex(content, r"\bverify\b", label)
-            self.assertRegex(content, r"\brollback\b", label)
-            self.assertRegex(content, r"\buninstall\b", label)
+            self.assertRegex(content, r"\bundo\b", label)
+            self.assertIn("--receipt", content, label)
             self.assertNotIn("--include-ima", content, label)
         self.assertLess(windows.index("$skillManager install"), windows.index('$vaultDeployer, "deploy"'))
         self.assertLess(mac.index('"$SKILL_MANAGER" install'), mac.index('"$VAULT_DEPLOYER" deploy'))
@@ -518,7 +518,7 @@ class SafeDeployTests(unittest.TestCase):
             r'if \[ "\$OVERWRITE" != "y" \][\s\S]*?yellow "  安装未完成：已保留现有 Vault，未执行部署"\s*exit 2\s*',
         )
 
-    def test_skill_verify_failure_restores_state_for_install_and_upgrade(self) -> None:
+    def test_skill_failures_use_transaction_receipt_instead_of_stale_plan_action(self) -> None:
         windows = (REPO_ROOT / "setup-win.ps1").read_text(encoding="utf-8")
         mac = (REPO_ROOT / "setup-mac.sh").read_text(encoding="utf-8")
 
@@ -526,18 +526,24 @@ class SafeDeployTests(unittest.TestCase):
         windows_verify_end = windows.index("$skillVerify =", windows_verify_start)
         windows_failure = windows[windows_verify_start:windows_verify_end]
         self.assertIn('$verifyExit = $LASTEXITCODE', windows_failure)
-        self.assertIn('"install" { "uninstall" }', windows_failure)
-        self.assertIn('"upgrade" { "rollback" }', windows_failure)
-        self.assertIn('$skillManager $restoreCommand --home $env:USERPROFILE', windows_failure)
+        self.assertIn(
+            '$skillManager undo --home $env:USERPROFILE --receipt $skillUndoReceipt',
+            windows_failure,
+        )
         self.assertIn('exit $verifyExit', windows_failure)
+        self.assertNotIn('$skillPlan.action', windows_failure)
+        self.assertNotIn('$restoreCommand', windows)
 
         mac_verify_start = mac.index('if ! SKILL_VERIFY=')
         mac_verify_end = mac.index('SKILL_NAMES=', mac_verify_start)
         mac_failure = mac[mac_verify_start:mac_verify_end]
-        self.assertIn('install) RESTORE_COMMAND="uninstall"', mac_failure)
-        self.assertIn('upgrade) RESTORE_COMMAND="rollback"', mac_failure)
-        self.assertIn('"$SKILL_MANAGER" "$RESTORE_COMMAND" --home "$HOME"', mac_failure)
+        self.assertIn(
+            '"$SKILL_MANAGER" undo --home "$HOME" --receipt "$SKILL_UNDO_RECEIPT"',
+            mac_failure,
+        )
         self.assertIn('exit 1', mac_failure)
+        self.assertNotIn('$SKILL_ACTION', mac_failure)
+        self.assertNotIn('RESTORE_COMMAND', mac)
 
 
 if __name__ == "__main__":

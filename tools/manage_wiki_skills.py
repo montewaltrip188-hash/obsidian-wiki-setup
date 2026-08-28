@@ -126,6 +126,17 @@ class MutationLock:
                 "previous_owner": self._previous_owner_summary(previous),
             }
             self._write_metadata(metadata)
+            held_file = os.environ.get("WIKI_SKILL_TEST_LOCK_HELD_FILE")
+            release_file = os.environ.get("WIKI_SKILL_TEST_LOCK_RELEASE_FILE")
+            if held_file or release_file:
+                if not held_file or not release_file:
+                    raise LifecycleError("INSTALL_TRANSACTION_TEST_HOOK_INVALID")
+                Path(held_file).write_text(self.owner_id + "\n", encoding="utf-8")
+                deadline = time.monotonic() + 30
+                while not Path(release_file).exists():
+                    if time.monotonic() >= deadline:
+                        raise LifecycleError("INSTALL_TRANSACTION_TEST_HOOK_TIMEOUT")
+                    time.sleep(0.01)
             return self
         except Exception:
             self._unlock_stream(self.stream)
@@ -183,6 +194,9 @@ def make_parser():
     rollback.add_argument("--home", required=True, type=Path)
     uninstall = commands.add_parser("uninstall")
     uninstall.add_argument("--home", required=True, type=Path)
+    undo = commands.add_parser("undo")
+    undo.add_argument("--home", required=True, type=Path)
+    undo.add_argument("--receipt", required=True, type=Path)
     return parser
 
 
@@ -242,6 +256,97 @@ def inventory(root):
             continue
         files[relative] = {"sha256": sha256(path), "size": path.stat().st_size}
     return files
+
+
+def json_fingerprint(payload):
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def managed_snapshot(home):
+    """返回可由回执绑定的完整受管状态；已安装状态必须先通过验收。"""
+    home = home.absolute()
+    package = home / ".agents" / "packages" / PACKAGE_NAME
+    state_path = package / "state.json"
+    if not state_path.exists():
+        if package.exists():
+            raise LifecycleError("发现无状态包目录，拒绝生成事务快照")
+        return {
+            "installed": False,
+            "active_version": None,
+            "state": None,
+            "package_fingerprint": None,
+            "entries_fingerprint": None,
+        }
+
+    verify(argparse.Namespace(home=home))
+    _, _, state = load_state(home)
+    entries = {}
+    for owner, configured in state["entries"].items():
+        entries[owner] = {}
+        root = Path(state["owned_roots"][owner])
+        for name, ownership in configured.items():
+            destination = root / name
+            mode = ownership["mode"]
+            entries[owner][name] = {
+                "mode": mode,
+                "target": os.path.normcase(os.path.realpath(destination)),
+                "fingerprint": inventory(destination) if mode == "copy" else None,
+                "skill_md_sha256": sha256(destination / "SKILL.md"),
+            }
+    return {
+        "installed": True,
+        "active_version": state["active_version"],
+        "state": state,
+        "package_fingerprint": json_fingerprint(inventory(package)),
+        "entries_fingerprint": json_fingerprint(entries),
+    }
+
+
+def write_undo_receipt(home, transaction_id, action, changed, before, after):
+    receipt_dir = home / ".agents" / "receipts" / PACKAGE_NAME
+    receipt_path = receipt_dir / f"{transaction_id}.undo.json"
+    payload = {
+        "schema_version": 1,
+        "receipt_type": "wiki-skill-install-undo",
+        "package": PACKAGE_NAME,
+        "transaction_id": transaction_id,
+        "home": str(Path(os.path.realpath(home.absolute()))),
+        "action": action,
+        "changed": changed,
+        "before": before,
+        "after": after,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    payload["receipt_digest"] = json_fingerprint(payload)
+    atomic_json(receipt_path, payload)
+    return receipt_path
+
+
+def load_undo_receipt(path, home):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise LifecycleError("UNDO_RECEIPT_INVALID") from error
+    digest = payload.pop("receipt_digest", None)
+    if digest != json_fingerprint(payload):
+        raise LifecycleError("UNDO_RECEIPT_INTEGRITY_MISMATCH")
+    payload["receipt_digest"] = digest
+    expected_home = str(Path(os.path.realpath(home.absolute())))
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("receipt_type") != "wiki-skill-install-undo"
+        or payload.get("package") != PACKAGE_NAME
+        or payload.get("home") != expected_home
+        or not re.fullmatch(r"[0-9a-f]{32}", str(payload.get("transaction_id", "")))
+        or not isinstance(payload.get("changed"), bool)
+        or not isinstance(payload.get("before"), dict)
+        or not isinstance(payload.get("after"), dict)
+    ):
+        raise LifecycleError("UNDO_RECEIPT_CONTRACT_MISMATCH")
+    return payload
 
 
 def ensure_windows_path_budget(source, versions_root, version):
@@ -413,17 +518,18 @@ def install(args):
     home = args.home.absolute()
     package = home / ".agents" / "packages" / PACKAGE_NAME
     ensure_windows_path_budget(source, package / "versions", version)
-    with MutationLock(home, "install"):
-        return install_locked(args)
+    with MutationLock(home, "install") as transaction:
+        return install_locked(args, transaction.owner_id)
 
 
-def install_locked(args):
+def install_locked(args, transaction_id):
     plan = build_plan(args)
     home = args.home.absolute()
     owned_roots = {owner: Path(path) for owner, path in plan["owned_roots"].items()}
     package = home / ".agents" / "packages" / PACKAGE_NAME
     version_root = package / "versions" / plan["version"]
     state_path = package / "state.json"
+    before = managed_snapshot(home)
     previous_state = None
     if state_path.exists():
         verify(argparse.Namespace(home=home))
@@ -441,8 +547,16 @@ def install_locked(args):
             current = package / "versions" / plan["version"]
             if inventory(args.source.absolute()) != inventory(current):
                 raise LifecycleError("相同版本号对应不同文件，拒绝覆盖")
+            after = managed_snapshot(home)
+            undo_receipt = write_undo_receipt(
+                home, transaction_id, "already_installed", False, before, after
+            )
             return {
                 "status": "already_installed",
+                "action": "already_installed",
+                "changed": False,
+                "transaction_id": transaction_id,
+                "undo_receipt": str(undo_receipt),
                 "version": plan["version"],
                 "skills": plan["skills"],
                 "state": str(state_path),
@@ -530,6 +644,11 @@ def install_locked(args):
             "entries": entries,
         }
         atomic_json(state_path, state)
+        action = "upgrade" if previous_state else "install"
+        after = managed_snapshot(home)
+        undo_receipt = write_undo_receipt(
+            home, transaction_id, action, True, before, after
+        )
     except Exception:
         for destination, mode in reversed(created_entries):
             if destination.exists() or destination.is_symlink():
@@ -541,9 +660,17 @@ def install_locked(args):
             shutil.rmtree(staging)
         if published_version and version_root.exists():
             shutil.rmtree(version_root)
+        if previous_state:
+            atomic_json(state_path, previous_state)
+        elif package.exists():
+            shutil.rmtree(package)
         raise
     return {
         "status": "upgraded" if previous_state else "installed",
+        "action": action,
+        "changed": True,
+        "transaction_id": transaction_id,
+        "undo_receipt": str(undo_receipt),
         "version": plan["version"],
         "skills": plan["skills"],
         "state": str(state_path),
@@ -566,6 +693,8 @@ def load_state(home):
 
 
 def verify(args):
+    if os.environ.get("WIKI_SKILL_TEST_FORCE_VERIFY_FAILURE") == "1":
+        raise LifecycleError("TEST_FORCED_VERIFY_FAILURE")
     home = args.home.absolute()
     package, state_path, state = load_state(home)
     version_root = package / "versions" / state["active_version"]
@@ -724,6 +853,178 @@ def uninstall_locked(args):
     }
 
 
+def undo(args):
+    home = args.home.absolute()
+    with MutationLock(home, "undo"):
+        return undo_locked(args)
+
+
+def undo_locked(args):
+    home = args.home.absolute()
+    receipt = load_undo_receipt(args.receipt.absolute(), home)
+    try:
+        current = managed_snapshot(home)
+    except LifecycleError as error:
+        raise LifecycleError(f"UNDO_AFTER_STATE_DRIFT: {error}") from error
+    if current != receipt["after"]:
+        raise LifecycleError("UNDO_AFTER_STATE_DRIFT")
+    if not receipt["changed"]:
+        return {
+            "status": "undo_noop",
+            "transaction_id": receipt["transaction_id"],
+            "changed": False,
+        }
+
+    if receipt["before"].get("installed"):
+        return undo_upgrade_locked(home, receipt)
+    return undo_fresh_locked(home, receipt)
+
+
+def undo_fresh_locked(home, receipt):
+    if receipt.get("action") != "install" or receipt["before"].get("installed"):
+        raise LifecycleError("UNDO_RECEIPT_INSTALL_CONTRACT_MISMATCH")
+    package, _, state = load_state(home)
+    backup_root = home / ".agents" / "undo-staging"
+    package_backup = backup_root / f"{receipt['transaction_id']}.package-backup"
+    if package_backup.exists():
+        raise LifecycleError("UNDO_TEMPORARY_BACKUP_COLLISION")
+    removed = []
+    try:
+        backup_root.mkdir(parents=True, exist_ok=True)
+        package.replace(package_backup)
+        for owner, configured in state["entries"].items():
+            root = Path(state["owned_roots"][owner])
+            for name, ownership in configured.items():
+                destination = root / name
+                remove_owned_entry(destination, ownership["mode"])
+                removed.append((destination, ownership))
+        if managed_snapshot(home) != receipt["before"]:
+            raise LifecycleError("UNDO_BEFORE_STATE_MISMATCH")
+        shutil.rmtree(package_backup)
+    except Exception:
+        if package_backup.exists() and not package.exists():
+            package_backup.replace(package)
+        for destination, ownership in removed:
+            if not destination.exists() and not destination.is_symlink():
+                recreate_owned_entry(
+                    Path(ownership["target"]), destination, ownership["mode"]
+                )
+        raise
+    if backup_root.exists() and not any(backup_root.iterdir()):
+        backup_root.rmdir()
+    return {
+        "status": "undone",
+        "transaction_id": receipt["transaction_id"],
+        "changed": True,
+        **capability_receipt(False),
+    }
+
+
+def undo_upgrade_locked(home, receipt):
+    before = receipt["before"]
+    after = receipt["after"]
+    before_state = before.get("state")
+    after_state = after.get("state")
+    if (
+        receipt.get("action") != "upgrade"
+        or not isinstance(before_state, dict)
+        or not isinstance(after_state, dict)
+        or before.get("active_version") == after.get("active_version")
+    ):
+        raise LifecycleError("UNDO_RECEIPT_UPGRADE_CONTRACT_MISMATCH")
+
+    package, state_path, current_state = load_state(home)
+    if current_state != after_state:
+        raise LifecycleError("UNDO_AFTER_STATE_DRIFT")
+    before_version = before["active_version"]
+    after_version = after["active_version"]
+    before_root = package / "versions" / before_version
+    after_root = package / "versions" / after_version
+    before_manifest_path = before_root / ".wiki-skill-install.json"
+    if not before_manifest_path.is_file() or not after_root.is_dir():
+        raise LifecycleError("UNDO_VERSION_STATE_INCOMPLETE")
+    try:
+        before_manifest = json.loads(before_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise LifecycleError("UNDO_BEFORE_MANIFEST_INVALID") from error
+    if (
+        before_manifest.get("version") != before_version
+        or before_manifest.get("skills") != before_state.get("owned_skills")
+        or before_manifest.get("files") != inventory(before_root)
+    ):
+        raise LifecycleError("UNDO_BEFORE_VERSION_DRIFT")
+    if (
+        before_state.get("package") != PACKAGE_NAME
+        or before_state.get("owned_roots") != after_state.get("owned_roots")
+        or before_state.get("runtime_aliases") != after_state.get("runtime_aliases")
+        or before_state.get("owned_skills") != after_state.get("owned_skills")
+    ):
+        raise LifecycleError("UNDO_BEFORE_STATE_CONTRACT_MISMATCH")
+
+    removed_after = []
+    created_before = []
+    backup_root = home / ".agents" / "undo-staging"
+    version_backup = backup_root / f"{receipt['transaction_id']}.version-backup"
+    if version_backup.exists():
+        raise LifecycleError("UNDO_TEMPORARY_BACKUP_COLLISION")
+    try:
+        backup_root.mkdir(parents=True, exist_ok=True)
+        for owner, configured in after_state["entries"].items():
+            root = Path(after_state["owned_roots"][owner])
+            for name, ownership in configured.items():
+                destination = root / name
+                remove_owned_entry(destination, ownership["mode"])
+                removed_after.append((destination, ownership))
+
+        entries = {}
+        for owner, configured in before_state["entries"].items():
+            entries[owner] = {}
+            root = Path(before_state["owned_roots"][owner])
+            for name, ownership in configured.items():
+                destination = root / name
+                source = entry_source(before_root, name)
+                expected_target = os.path.normcase(os.path.realpath(ownership["target"]))
+                if os.path.normcase(os.path.realpath(source)) != expected_target:
+                    raise LifecycleError("UNDO_BEFORE_ENTRY_TARGET_MISMATCH")
+                mode = recreate_owned_entry(source, destination, ownership["mode"])
+                created_before.append((destination, mode))
+                entries[owner][name] = {
+                    "mode": mode,
+                    "target": str(source),
+                    "fingerprint": inventory(destination) if mode == "copy" else None,
+                }
+        restored_state = dict(before_state)
+        restored_state["entries"] = entries
+        atomic_json(state_path, restored_state)
+        after_root.replace(version_backup)
+        if managed_snapshot(home) != before:
+            raise LifecycleError("UNDO_BEFORE_STATE_MISMATCH")
+        shutil.rmtree(version_backup)
+    except Exception:
+        for destination, mode in reversed(created_before):
+            if destination.exists() or destination.is_symlink():
+                remove_owned_entry(destination, mode)
+        if version_backup.exists() and not after_root.exists():
+            version_backup.replace(after_root)
+        atomic_json(state_path, after_state)
+        for destination, ownership in removed_after:
+            if not destination.exists() and not destination.is_symlink():
+                recreate_owned_entry(
+                    Path(ownership["target"]), destination, ownership["mode"]
+                )
+        raise
+    if backup_root.exists() and not any(backup_root.iterdir()):
+        backup_root.rmdir()
+    return {
+        "status": "undone",
+        "transaction_id": receipt["transaction_id"],
+        "changed": True,
+        "version": before_version,
+        "skills": before_state["owned_skills"],
+        **capability_receipt(True),
+    }
+
+
 def main():
     try:
         args = make_parser().parse_args()
@@ -737,6 +1038,8 @@ def main():
             result = rollback(args)
         elif args.command == "uninstall":
             result = uninstall(args)
+        elif args.command == "undo":
+            result = undo(args)
         else:
             raise LifecycleError("不支持的命令")
         print(json.dumps(result, ensure_ascii=False, indent=2))

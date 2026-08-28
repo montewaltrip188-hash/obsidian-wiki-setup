@@ -60,51 +60,67 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         stream = result.stdout if expected == 0 else result.stderr
         return json.loads(stream)
 
-    def run_concurrent_installs(self):
-        barrier = self.root / "start-concurrent-install"
-        wrapper = (
-            "import subprocess,sys,time; from pathlib import Path; "
-            "ready=Path(sys.argv[1]); barrier=Path(sys.argv[2]); "
-            "ready.write_text('ready', encoding='utf-8'); "
-            "\nwhile not barrier.exists(): time.sleep(0.005)\n"
-            "completed=subprocess.run([sys.executable, *sys.argv[3:]]); "
-            "raise SystemExit(completed.returncode)"
+    def start_lock_held_install(self):
+        held = self.root / ("lock-held-" + next(tempfile._get_candidate_names()))
+        release = self.root / ("lock-release-" + next(tempfile._get_candidate_names()))
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(CLI),
+                "install",
+                "--source",
+                str(self.source),
+                "--home",
+                str(self.home),
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            env={
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "WIKI_SKILL_TEST_LOCK_HELD_FILE": str(held),
+                "WIKI_SKILL_TEST_LOCK_RELEASE_FILE": str(release),
+            },
         )
-        processes = []
-        ready_paths = []
-        for index in range(2):
-            ready = self.root / f"concurrent-install-{index}.ready"
-            ready_paths.append(ready)
-            processes.append(
-                subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-c",
-                        wrapper,
-                        str(ready),
-                        str(barrier),
-                        str(CLI),
-                        "install",
-                        "--source",
-                        str(self.source),
-                        "--home",
-                        str(self.home),
-                    ],
-                    cwd=ROOT,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    encoding="utf-8",
-                    env={**os.environ, "PYTHONUTF8": "1"},
-                )
-            )
-        deadline = time.monotonic() + 10
-        while not all(path.exists() for path in ready_paths):
+        deadline = time.monotonic() + 5
+        while not held.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                self.fail(f"锁持有进程提前退出：{stdout} {stderr}")
             if time.monotonic() >= deadline:
-                self.fail("并发安装子进程未在时限内就绪")
+                process.kill()
+                process.communicate()
+                self.fail("锁持有钩子未在时限内发出同步信号")
             time.sleep(0.01)
-        barrier.write_text("go\n", encoding="utf-8")
-        return [process.communicate(timeout=60) + (process.returncode,) for process in processes]
+        return process, release
+
+    def run_concurrent_installs(self):
+        winner, release = self.start_lock_held_install()
+        blocked = subprocess.run(
+            [
+                sys.executable,
+                str(CLI),
+                "install",
+                "--source",
+                str(self.source),
+                "--home",
+                str(self.home),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONUTF8": "1"},
+        )
+        release.write_text("release\n", encoding="utf-8")
+        winner_output = winner.communicate(timeout=60)
+        return [
+            winner_output + (winner.returncode,),
+            (blocked.stdout, blocked.stderr, blocked.returncode),
+        ]
 
     def alias_claude_root_to_codex_root(self):
         codex_root = self.home / ".agents" / "skills"
@@ -233,7 +249,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
     def test_machine_readable_contract_freezes_public_seams_and_manual_gates(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         self.assertEqual(
-            ["plan", "install", "verify", "rollback", "uninstall"],
+            ["plan", "install", "verify", "rollback", "uninstall", "undo"],
             contract["commands"],
         )
         self.assertEqual(list(CORE), contract["defaults"]["skills"])
@@ -247,7 +263,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
             ["install", "upgrade", "already_installed"], contract["plan"]["actions"]
         )
         self.assertEqual(
-            ["install", "rollback", "uninstall"],
+            ["install", "rollback", "uninstall", "undo"],
             contract["transaction_lock"]["commands"],
         )
         self.assertEqual("kernel_file_lock", contract["transaction_lock"]["lease"])
@@ -256,6 +272,27 @@ class WikiSkillLifecycleTest(unittest.TestCase):
             ["plan", "verify"], contract["transaction_lock"]["read_only_commands"]
         )
         self.assertIn("concurrent_mutation", contract["fail_closed_on"])
+        self.assertIn("after_state_drift", contract["fail_closed_on"])
+        self.assertEqual(
+            "install_output.undo_receipt", contract["undo"]["receipt_source"]
+        )
+        self.assertEqual(
+            [
+                "transaction_id",
+                "home",
+                "changed",
+                "before",
+                "after",
+                "package_fingerprint",
+                "entries_fingerprint",
+            ],
+            contract["undo"]["bindings"],
+        )
+        self.assertEqual("no_op", contract["undo"]["unchanged_transaction"])
+        self.assertEqual(
+            "must_equal_receipt_after_state",
+            contract["undo"]["current_state_requirement"],
+        )
 
     def test_unsafe_version_cannot_escape_version_directory(self):
         (self.source / "VERSION").write_text("..\n", encoding="utf-8")
@@ -303,12 +340,211 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertGreater(len(manifest["files"]), 6)
         self.assertEqual("installed", receipt["status"])
 
-    def test_concurrent_install_on_same_home_allows_one_transaction_and_preserves_winner(self):
-        for index in range(1000):
-            fixture = self.source / "references" / "concurrency" / f"fixture-{index:04d}.txt"
-            fixture.parent.mkdir(parents=True, exist_ok=True)
-            fixture.write_text(("concurrent-install\n" * 32), encoding="utf-8")
+    def test_install_receipt_can_undo_a_fresh_install(self):
+        installed = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
 
+        self.assertTrue(installed["changed"])
+        self.assertEqual("install", installed["action"])
+        self.assertRegex(installed["transaction_id"], r"^[0-9a-f]{32}$")
+        undo_receipt = Path(installed["undo_receipt"])
+        self.assertTrue(undo_receipt.is_file())
+        payload = json.loads(undo_receipt.read_text(encoding="utf-8"))
+        self.assertFalse(payload["before"]["installed"])
+        self.assertTrue(payload["after"]["installed"])
+        self.assertEqual("2.0.1", payload["after"]["active_version"])
+        self.assertIn("package_fingerprint", payload["after"])
+        self.assertIn("entries_fingerprint", payload["after"])
+
+        undone = self.run_cli(
+            "undo", "--home", self.home, "--receipt", undo_receipt
+        )
+
+        self.assertEqual("undone", undone["status"])
+        self.assertEqual(installed["transaction_id"], undone["transaction_id"])
+        self.assertFalse(
+            (
+                self.home
+                / ".agents"
+                / "packages"
+                / "claudecode-wiki-skills"
+            ).exists()
+        )
+        for runtime in (
+            self.home / ".agents" / "skills",
+            self.home / ".claude" / "skills",
+        ):
+            for name in CORE:
+                self.assertFalse((runtime / name).exists())
+
+    def test_receipt_write_failure_reverts_install_in_same_transaction(self):
+        receipt_parent = self.home / ".agents" / "receipts"
+        receipt_parent.mkdir(parents=True)
+        (receipt_parent / "claudecode-wiki-skills").write_text(
+            "blocks receipt directory\n", encoding="utf-8"
+        )
+
+        blocked = self.run_cli(
+            "install",
+            "--source",
+            self.source,
+            "--home",
+            self.home,
+            expected=2,
+        )
+
+        self.assertEqual("OPERATION_FAILED", blocked["error"])
+        self.assertFalse(
+            (
+                self.home
+                / ".agents"
+                / "packages"
+                / "claudecode-wiki-skills"
+            ).exists()
+        )
+        for runtime in (
+            self.home / ".agents" / "skills",
+            self.home / ".claude" / "skills",
+        ):
+            for name in CORE:
+                self.assertFalse((runtime / name).exists())
+
+    def test_install_self_verify_failure_reverts_in_same_transaction(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CLI),
+                "install",
+                "--source",
+                str(self.source),
+                "--home",
+                str(self.home),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env={
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "WIKI_SKILL_TEST_FORCE_VERIFY_FAILURE": "1",
+            },
+        )
+
+        self.assertEqual(2, result.returncode, result.stdout)
+        self.assertIn("TEST_FORCED_VERIFY_FAILURE", result.stderr)
+        self.assertFalse(
+            (
+                self.home
+                / ".agents"
+                / "packages"
+                / "claudecode-wiki-skills"
+            ).exists()
+        )
+        for runtime in (
+            self.home / ".agents" / "skills",
+            self.home / ".claude" / "skills",
+        ):
+            for name in CORE:
+                self.assertFalse((runtime / name).exists())
+
+    def test_undo_fails_closed_when_package_drifted_after_install(self):
+        installed = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        package_file = (
+            self.home
+            / ".agents"
+            / "packages"
+            / "claudecode-wiki-skills"
+            / "versions"
+            / "2.0.1"
+            / "core"
+            / "design-juan-wiki"
+            / "SKILL.md"
+        )
+        package_file.write_text("drifted after install\n", encoding="utf-8")
+
+        blocked = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            installed["undo_receipt"],
+            expected=2,
+        )
+
+        self.assertIn("UNDO_AFTER_STATE_DRIFT", blocked["error"])
+        self.assertEqual(
+            "drifted after install\n", package_file.read_text(encoding="utf-8")
+        )
+
+    def test_undo_fails_closed_when_entry_replaced_after_install(self):
+        installed = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        entry = self.home / ".agents" / "skills" / "design-juan-wiki"
+        if os.name == "nt":
+            os.rmdir(entry)
+        else:
+            entry.unlink()
+        entry.mkdir()
+        replacement = entry / "SKILL.md"
+        replacement.write_text("another transaction\n", encoding="utf-8")
+
+        blocked = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            installed["undo_receipt"],
+            expected=2,
+        )
+
+        self.assertIn("UNDO_AFTER_STATE_DRIFT", blocked["error"])
+        self.assertEqual(
+            "another transaction\n", replacement.read_text(encoding="utf-8")
+        )
+
+    def test_setup_style_verify_failure_uses_install_receipt_to_restore(self):
+        installed = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        verification = subprocess.run(
+            [sys.executable, str(CLI), "verify", "--home", str(self.home)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env={
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "WIKI_SKILL_TEST_FORCE_VERIFY_FAILURE": "1",
+            },
+        )
+        self.assertEqual(2, verification.returncode, verification.stdout)
+        self.assertIn("TEST_FORCED_VERIFY_FAILURE", verification.stderr)
+
+        restored = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            installed["undo_receipt"],
+        )
+
+        self.assertEqual("undone", restored["status"])
+        self.assertFalse(
+            (
+                self.home
+                / ".agents"
+                / "packages"
+                / "claudecode-wiki-skills"
+            ).exists()
+        )
+
+    def test_concurrent_install_on_same_home_allows_one_transaction_and_preserves_winner(self):
         results = self.run_concurrent_installs()
 
         self.assertEqual([0, 2], sorted(result[2] for result in results), results)
@@ -317,6 +553,35 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual("blocked", blocked_receipt["status"])
         self.assertEqual("INSTALL_TRANSACTION_LOCKED", blocked_receipt["error"])
         self.assertEqual("verified", self.run_cli("verify", "--home", self.home)["status"])
+
+    def test_stale_plan_noop_undo_does_not_remove_concurrent_winner(self):
+        winner, release = self.start_lock_held_install()
+        stale_plan = self.run_cli(
+            "plan", "--source", self.source, "--home", self.home
+        )
+        self.assertEqual("install", stale_plan["action"])
+        release.write_text("release\n", encoding="utf-8")
+        winner_stdout, winner_stderr = winner.communicate(timeout=60)
+        self.assertEqual(0, winner.returncode, winner_stderr or winner_stdout)
+
+        follower = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        self.assertEqual("already_installed", follower["action"])
+        self.assertFalse(follower["changed"])
+
+        undone = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            follower["undo_receipt"],
+        )
+        self.assertEqual("undo_noop", undone["status"])
+        self.assertFalse(undone["changed"])
+        self.assertEqual(
+            "verified", self.run_cli("verify", "--home", self.home)["status"]
+        )
 
     def test_install_recovers_stale_unlocked_metadata_without_preserving_owner_chain(self):
         lock_path = (
@@ -447,6 +712,43 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual(
             "2.0.2\n",
             (self.home / ".agents" / "skills" / "design-juan-wiki" / "release.txt").read_text(encoding="utf-8"),
+        )
+
+    def test_upgrade_receipt_restores_exact_previous_state(self):
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        self._make_source("2.0.2")
+        marker = self.source / "core" / "design-juan-wiki" / "release.txt"
+        marker.write_text("2.0.2\n", encoding="utf-8")
+
+        upgraded = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        self.assertEqual("upgrade", upgraded["action"])
+        self.assertTrue(upgraded["changed"])
+
+        undone = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            upgraded["undo_receipt"],
+        )
+
+        self.assertEqual("undone", undone["status"])
+        verified = self.run_cli("verify", "--home", self.home)
+        self.assertEqual("2.0.1", verified["version"])
+        package = (
+            self.home / ".agents" / "packages" / "claudecode-wiki-skills"
+        )
+        self.assertFalse((package / "versions" / "2.0.2").exists())
+        self.assertFalse(
+            (
+                self.home
+                / ".agents"
+                / "skills"
+                / "design-juan-wiki"
+                / "release.txt"
+            ).exists()
         )
 
     def test_upgrade_blocks_link_mode_migration_without_separate_migration(self):

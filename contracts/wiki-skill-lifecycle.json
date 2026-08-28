@@ -1,12 +1,13 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "component": "claudecode-wiki-skills",
   "commands": [
     "plan",
     "install",
     "verify",
     "rollback",
-    "uninstall"
+    "uninstall",
+    "undo"
   ],
   "defaults": {
     "scope": "user",
@@ -38,11 +39,28 @@
     ],
     "precedes_vault_write": true
   },
+  "undo": {
+    "receipt_source": "install_output.undo_receipt",
+    "bindings": [
+      "transaction_id",
+      "home",
+      "changed",
+      "before",
+      "after",
+      "package_fingerprint",
+      "entries_fingerprint"
+    ],
+    "current_state_requirement": "must_equal_receipt_after_state",
+    "unchanged_transaction": "no_op",
+    "upgrade_restore": "exact_previous_state_and_remove_transaction_version",
+    "setup_failure_policy": "verify_or_vault_failure_calls_receipt_bound_undo"
+  },
   "transaction_lock": {
     "commands": [
       "install",
       "rollback",
-      "uninstall"
+      "uninstall",
+      "undo"
     ],
     "read_only_commands": [
       "plan",
@@ -87,6 +105,8 @@
     "link_mode_migration",
     "link_creation_without_copy_authorization",
     "concurrent_mutation",
+    "after_state_drift",
+    "undo_receipt_mismatch",
     "network_dependency_required",
     "elevation_required"
   ]
