@@ -79,11 +79,15 @@
     ],
     "stale_recovery": "automatic_on_process_exit",
     "active_lock_policy": "never_break_by_timeout",
-    "release_audit_failure": "best_effort_result_warning"
+    "release_audit_failure": "best_effort_result_warning",
+    "corrupt_stale_audit_recovery": "overwrite_only_after_kernel_lock_acquired"
   },
   "ownership": {
     "state": "~/.agents/packages/claudecode-wiki-skills/state.json",
+    "state_schema_version": 2,
     "install_generation": "persistent_transaction_id",
+    "legacy_schema_v1": "read_only_compatible_without_generation",
+    "legacy_migration": "first_locked_install_transaction",
     "version_manifest": ".wiki-skill-install.json",
     "runtime_aliases": "logical_runtime_to_owned_root",
     "owned_roots": "one_entry_set_per_physical_root",

@@ -163,6 +163,18 @@ class WikiSkillLifecycleTest(unittest.TestCase):
                 snapshot[relative] = record
         return snapshot
 
+    def downgrade_managed_state_to_legacy_v1(self):
+        state_path = (
+            self.home / ".agents" / "packages" / "claudecode-wiki-skills" / "state.json"
+        )
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["schema_version"] = 1
+        state.pop("install_generation", None)
+        state_path.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return state_path
+
     def test_plan_is_read_only_and_defaults_to_three_core_skills(self):
         before = sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*"))
 
@@ -246,6 +258,40 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual("blocked", blocked["status"])
         self.assertEqual(drifted, self.snapshot_home())
 
+    def test_legacy_v1_plan_and_verify_are_read_only(self):
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        state_path = self.downgrade_managed_state_to_legacy_v1()
+        legacy_bytes = state_path.read_bytes()
+        before = self.snapshot_home()
+
+        plan = self.run_cli("plan", "--source", self.source, "--home", self.home)
+        verified = self.run_cli("verify", "--home", self.home)
+
+        self.assertEqual("already_installed", plan["action"])
+        self.assertEqual("verified", verified["status"])
+        self.assertEqual(1, verified["state_schema_version"])
+        self.assertEqual(before, self.snapshot_home())
+        self.assertEqual(legacy_bytes, state_path.read_bytes())
+
+    def test_v1_with_generation_is_rejected_without_writes(self):
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        state_path = (
+            self.home / ".agents" / "packages" / "claudecode-wiki-skills" / "state.json"
+        )
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["schema_version"] = 1
+        state_path.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        before = self.snapshot_home()
+
+        blocked = self.run_cli(
+            "plan", "--source", self.source, "--home", self.home, expected=2
+        )
+
+        self.assertIn("schema v1", blocked["error"])
+        self.assertEqual(before, self.snapshot_home())
+
     def test_machine_readable_contract_freezes_public_seams_and_manual_gates(self):
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         self.assertEqual(
@@ -301,6 +347,19 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual(
             "best_effort_result_warning",
             contract["transaction_lock"]["release_audit_failure"],
+        )
+        self.assertEqual(
+            "overwrite_only_after_kernel_lock_acquired",
+            contract["transaction_lock"]["corrupt_stale_audit_recovery"],
+        )
+        self.assertEqual(2, contract["ownership"]["state_schema_version"])
+        self.assertEqual(
+            "read_only_compatible_without_generation",
+            contract["ownership"]["legacy_schema_v1"],
+        )
+        self.assertEqual(
+            "first_locked_install_transaction",
+            contract["ownership"]["legacy_migration"],
         )
 
     def test_unsafe_version_cannot_escape_version_directory(self):
@@ -458,6 +517,78 @@ class WikiSkillLifecycleTest(unittest.TestCase):
             "install", "--source", self.source, "--home", self.home
         )
         self.assertEqual("already_installed", follower["status"])
+
+    def test_partial_release_audit_write_is_recovered_only_after_follower_gets_lock(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(CLI),
+                "install",
+                "--source",
+                str(self.source),
+                "--home",
+                str(self.home),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env={
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "WIKI_SKILL_TEST_FORCE_LOCK_RELEASE_AUDIT_PARTIAL_WRITE": "1",
+            },
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+        installed = json.loads(completed.stdout)
+        self.assertEqual(
+            "LOCK_RELEASE_AUDIT_WRITE_FAILED", installed["lock_audit_error"]
+        )
+
+        follower = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        self.assertEqual("already_installed", follower["status"])
+        self.assertEqual(
+            "verified", self.run_cli("verify", "--home", self.home)["status"]
+        )
+        undone = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            installed["undo_receipt"],
+        )
+        self.assertEqual("undone", undone["status"])
+
+    def test_legacy_v1_install_migrates_to_v2_and_receipt_undo_restores_v1(self):
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        state_path = self.downgrade_managed_state_to_legacy_v1()
+        legacy_state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        migrated = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+
+        self.assertEqual("migrated", migrated["status"])
+        self.assertEqual("migrate", migrated["action"])
+        self.assertTrue(migrated["changed"])
+        current = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(2, current["schema_version"])
+        self.assertEqual(migrated["transaction_id"], current["install_generation"])
+
+        undone = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            migrated["undo_receipt"],
+        )
+
+        self.assertEqual("undone", undone["status"])
+        self.assertEqual(legacy_state, json.loads(state_path.read_text(encoding="utf-8")))
+        verified = self.run_cli("verify", "--home", self.home)
+        self.assertEqual(1, verified["state_schema_version"])
 
     def test_receipt_write_failure_reverts_install_in_same_transaction(self):
         receipt_parent = self.home / ".agents" / "receipts"

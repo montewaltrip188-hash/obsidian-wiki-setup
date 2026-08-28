@@ -78,7 +78,7 @@ Wiki Skill 使用用户级版本化安装：
 ~/.claude/skills/<skill>
 ```
 
-Claude Code 与 Codex 指向同一份物理版本树。安装器支持 `plan / install / verify / rollback / uninstall / undo`，不会替换整个 Skill 根目录。`install` 会在事务锁内确定真实前后状态，持久化唯一 generation 并返回 `undo_receipt`；setup 在 Skill 验收或后续 Vault 部署失败时，只能携带该回执执行 `undo`。`undo` 直接重算回执绑定的 after-state、generation、包指纹、入口指纹与运行时别名，不依赖可能持续失败的公共 `verify`；任一真实漂移或旧回执重放都会停止，也不会依据锁外旧 plan 删除其他事务的结果。锁释放审计写入失败只作为结果警告，不会把已经提交且已有回执的事务伪装成失败。
+Claude Code 与 Codex 指向同一份物理版本树。安装器支持 `plan / install / verify / rollback / uninstall / undo`，不会替换整个 Skill 根目录。`install` 会在事务锁内确定真实前后状态，写入 state schema v2 的唯一 generation 并返回 `undo_receipt`；合法的旧 schema v1（不含 generation）仍可只读 plan/verify，首个 install 写事务会在验收原所有权与指纹后迁移到 v2，迁移本身也可凭回执撤销。setup 在 Skill 验收或后续 Vault 部署失败时，只能携带该回执执行 `undo`。`undo` 直接重算回执绑定的 after-state、generation、包指纹、入口指纹与运行时别名，不依赖可能持续失败的公共 `verify`；任一真实漂移或旧回执重放都会停止，也不会依据锁外旧 plan 删除其他事务的结果。锁释放审计写入失败只作为结果警告，不会把已经提交且已有回执的事务伪装成失败；只有 follower 已取得内核独占锁后，才会把无法解析的历史审计视为损坏的 stale audit 并覆盖，活锁不会按超时强拆。
 
 ## 激活与下载安全
 

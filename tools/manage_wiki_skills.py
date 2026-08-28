@@ -63,7 +63,10 @@ class MutationLock:
 
     def _read_metadata(self):
         self.stream.seek(1)
-        raw = self.stream.read().decode("utf-8", errors="strict").strip("\x00\r\n ")
+        try:
+            raw = self.stream.read().decode("utf-8", errors="strict").strip("\x00\r\n ")
+        except UnicodeDecodeError as error:
+            raise LifecycleError("INSTALL_TRANSACTION_LOCK_METADATA_INVALID") from error
         if not raw:
             return None
         try:
@@ -112,7 +115,16 @@ class MutationLock:
         try:
             # 旧元数据只用于审计。能取得内核锁即证明旧进程已释放或崩溃，
             # 因而无需按时间猜测并破坏可能仍然存活的锁。
-            previous = self._read_metadata()
+            stale_audit_error = None
+            try:
+                previous = self._read_metadata()
+            except LifecycleError as error:
+                if str(error) != "INSTALL_TRANSACTION_LOCK_METADATA_INVALID":
+                    raise
+                # 只有成功取得内核独占锁后，损坏元数据才可判定为 stale audit。
+                # 活跃进程持锁时执行流在 _lock_stream 已经停止，绝不会走到这里。
+                previous = None
+                stale_audit_error = "PREVIOUS_LOCK_AUDIT_CORRUPT"
             now = time.time()
             metadata = {
                 "schema_version": 1,
@@ -126,6 +138,8 @@ class MutationLock:
                 "created_unix": now,
                 "previous_owner": self._previous_owner_summary(previous),
             }
+            if stale_audit_error:
+                metadata["previous_audit_error"] = stale_audit_error
             self._write_metadata(metadata)
             held_file = os.environ.get("WIKI_SKILL_TEST_LOCK_HELD_FILE")
             release_file = os.environ.get("WIKI_SKILL_TEST_LOCK_RELEASE_FILE")
@@ -160,6 +174,18 @@ class MutationLock:
                     == "1"
                 ):
                     raise OSError("forced lock release audit failure")
+                if (
+                    os.environ.get(
+                        "WIKI_SKILL_TEST_FORCE_LOCK_RELEASE_AUDIT_PARTIAL_WRITE"
+                    )
+                    == "1"
+                ):
+                    self.stream.seek(1)
+                    self.stream.truncate()
+                    self.stream.write(b'{"partial_release_audit":')
+                    self.stream.flush()
+                    os.fsync(self.stream.fileno())
+                    raise OSError("forced partial lock release audit write")
                 self._write_metadata(metadata)
         except Exception:
             # 事务结果已在内核锁保护下提交。释放审计只能 best effort；
@@ -579,6 +605,30 @@ def install_locked(args, transaction_id):
             current = package / "versions" / plan["version"]
             if inventory(args.source.absolute()) != inventory(current):
                 raise LifecycleError("相同版本号对应不同文件，拒绝覆盖")
+            if previous_state["schema_version"] == 1:
+                migrated_state = dict(previous_state)
+                migrated_state["schema_version"] = 2
+                migrated_state["install_generation"] = transaction_id
+                try:
+                    atomic_json(state_path, migrated_state)
+                    after = managed_snapshot(home)
+                    undo_receipt = write_undo_receipt(
+                        home, transaction_id, "migrate", True, before, after
+                    )
+                except Exception:
+                    atomic_json(state_path, previous_state)
+                    raise
+                return {
+                    "status": "migrated",
+                    "action": "migrate",
+                    "changed": True,
+                    "transaction_id": transaction_id,
+                    "undo_receipt": str(undo_receipt),
+                    "version": plan["version"],
+                    "skills": plan["skills"],
+                    "state": str(state_path),
+                    **capability_receipt(True),
+                }
             after = managed_snapshot(home)
             undo_receipt = write_undo_receipt(
                 home, transaction_id, "already_installed", False, before, after
@@ -659,7 +709,7 @@ def install_locked(args, transaction_id):
                     "fingerprint": inventory(destination) if mode == "copy" else None,
                 }
         state = {
-            "schema_version": 1,
+            "schema_version": 2,
             "package": PACKAGE_NAME,
             "install_generation": transaction_id,
             "active_version": plan["version"],
@@ -722,6 +772,17 @@ def load_state(home):
         raise LifecycleError("安装状态不可读") from error
     if state.get("package") != PACKAGE_NAME or not state.get("active_version"):
         raise LifecycleError("安装状态合同不兼容")
+    schema_version = state.get("schema_version")
+    if schema_version == 1:
+        if "install_generation" in state:
+            raise LifecycleError("schema v1 不允许 install_generation，拒绝伪装旧状态")
+    elif schema_version == 2:
+        if not re.fullmatch(
+            r"[0-9a-f]{32}", str(state.get("install_generation", ""))
+        ):
+            raise LifecycleError("schema v2 缺少合法 install_generation")
+    else:
+        raise LifecycleError("安装状态 schema 不兼容")
     return package, state_path, state
 
 
@@ -730,8 +791,6 @@ def verify(args):
         raise LifecycleError("TEST_FORCED_VERIFY_FAILURE")
     home = args.home.absolute()
     package, state_path, state = load_state(home)
-    if not re.fullmatch(r"[0-9a-f]{32}", str(state.get("install_generation", ""))):
-        raise LifecycleError("安装 generation 合同不兼容")
     version_root = package / "versions" / state["active_version"]
     manifest_path = version_root / ".wiki-skill-install.json"
     if not manifest_path.is_file():
@@ -784,6 +843,7 @@ def verify(args):
         "version": state["active_version"],
         "skills": state["owned_skills"],
         "state": str(state_path),
+        "state_schema_version": state["schema_version"],
         "offline_baseline": manifest["capabilities"]["offline_baseline"],
         **capability_receipt(True),
     }
@@ -791,11 +851,11 @@ def verify(args):
 
 def rollback(args):
     with MutationLock(args.home.absolute(), "rollback") as transaction:
-        result = rollback_locked(args)
+        result = rollback_locked(args, transaction.owner_id)
     return attach_lock_audit(result, transaction)
 
 
-def rollback_locked(args):
+def rollback_locked(args, transaction_id):
     home = args.home.absolute()
     verify(argparse.Namespace(home=home))
     package, state_path, state = load_state(home)
@@ -836,6 +896,8 @@ def rollback_locked(args):
         state["active_version"] = target_version
         state["previous_versions"] = state["previous_versions"][:-1]
         state["entries"] = entries
+        state["schema_version"] = 2
+        state["install_generation"] = transaction_id
         atomic_json(state_path, state)
     except Exception:
         for destination, mode in reversed(new_entries):
@@ -913,9 +975,45 @@ def undo_locked(args):
             "changed": False,
         }
 
+    if receipt.get("action") == "migrate":
+        return undo_migration_locked(home, receipt)
     if receipt["before"].get("installed"):
         return undo_upgrade_locked(home, receipt)
     return undo_fresh_locked(home, receipt)
+
+
+def undo_migration_locked(home, receipt):
+    before = receipt["before"]
+    after = receipt["after"]
+    before_state = before.get("state")
+    after_state = after.get("state")
+    if (
+        not isinstance(before_state, dict)
+        or not isinstance(after_state, dict)
+        or before_state.get("schema_version") != 1
+        or "install_generation" in before_state
+        or after_state.get("schema_version") != 2
+        or before.get("active_version") != after.get("active_version")
+    ):
+        raise LifecycleError("UNDO_RECEIPT_MIGRATION_CONTRACT_MISMATCH")
+    _, state_path, current_state = load_state(home)
+    if current_state != after_state:
+        raise LifecycleError("UNDO_AFTER_STATE_DRIFT")
+    try:
+        atomic_json(state_path, before_state)
+        if raw_managed_snapshot(home) != before:
+            raise LifecycleError("UNDO_BEFORE_STATE_MISMATCH")
+    except Exception:
+        atomic_json(state_path, after_state)
+        raise
+    return {
+        "status": "undone",
+        "transaction_id": receipt["transaction_id"],
+        "changed": True,
+        "version": before_state["active_version"],
+        "skills": before_state["owned_skills"],
+        **capability_receipt(True),
+    }
 
 
 def undo_fresh_locked(home, receipt):
