@@ -1,0 +1,7 @@
+# 跨平台脚本必须保持 POSIX 换行，避免 Windows checkout 破坏 macOS/Linux 执行。
+*.sh text eol=lf
+
+# stable 指针固定的是 GitHub raw/tag 中的规范字节；本地 checkout 不得改写。
+release/release-signing-public-key.pem text eol=lf
+release/release-signing-public-key.xml text eol=lf
+release/stable.json text eol=lf
