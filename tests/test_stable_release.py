@@ -12,6 +12,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_KEY_ID = "c1f596094a9a54ada888502a2ab7ef6bc5fecf82d4281dd4bbae2ae7bc9d9938"
+EXPECTED_PEM_RAW_SHA256 = "a350fcd7160d8ca6a06d73da95061ae026424eed5b4cfb13dd21eec8cd465d3b"
+EXPECTED_XML_RAW_SHA256 = "3ab5cb740f3e92d3230561fe231f0f761e5fa1c3c058483a2ed2a48071b4245b"
 
 import sys
 
@@ -21,6 +23,10 @@ import promote_stable  # noqa: E402
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def raw_text_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def read_tlv(data: bytes, offset: int) -> tuple[int, bytes, int]:
@@ -94,6 +100,8 @@ class StableReleaseTests(unittest.TestCase):
     def test_public_pem_xml_and_downloaders_pin_the_same_production_key(self):
         pem = ROOT / "release" / "release-signing-public-key.pem"
         xml = ROOT / "release" / "release-signing-public-key.xml"
+        self.assertEqual(EXPECTED_PEM_RAW_SHA256, raw_text_sha256(pem))
+        self.assertEqual(EXPECTED_XML_RAW_SHA256, raw_text_sha256(xml))
         der, pem_modulus, pem_exponent = parse_rsa_spki(pem)
         self.assertEqual(EXPECTED_KEY_ID, hashlib.sha256(der).hexdigest())
         xml_root = ET.fromstring(xml.read_text(encoding="utf-8"))
@@ -111,12 +119,12 @@ class StableReleaseTests(unittest.TestCase):
         macos = (ROOT / "download-mac.sh").read_text(encoding="utf-8")
         for script in (windows, macos):
             self.assertIn(EXPECTED_KEY_ID, script)
-            self.assertIn(sha256(pem), script)
+            self.assertIn(EXPECTED_PEM_RAW_SHA256, script)
             self.assertIn("release-manifest", script)
             self.assertIn("stable.json", script)
             self.assertNotIn("gitee.com", script)
             self.assertNotIn("access_token", script.casefold())
-        self.assertIn(sha256(xml), windows)
+        self.assertIn(EXPECTED_XML_RAW_SHA256, windows)
         self.assertIn("VerifyData", windows)
         self.assertIn("openssl dgst -sha256 -verify", macos)
         self.assertNotIn('rm -rf "$d"', macos)
@@ -152,6 +160,9 @@ class StableReleaseTests(unittest.TestCase):
                 pointer = promote_stable.build_pointer(release_dir, "v2.1.0")
             self.assertEqual("stable", pointer["release_state"])
             self.assertEqual(EXPECTED_KEY_ID, pointer["trust"]["key_id"])
+            self.assertEqual(EXPECTED_PEM_RAW_SHA256, pointer["trust"]["pem"]["sha256"])
+            self.assertEqual(624, pointer["trust"]["pem"]["size"])
+            self.assertEqual(EXPECTED_XML_RAW_SHA256, pointer["trust"]["xml"]["sha256"])
             self.assertEqual(sha256(windows), pointer["assets"]["windows-x64"]["sha256"])
             self.assertEqual(sha256(macos), pointer["assets"]["macos-universal"]["sha256"])
             self.assertTrue(pointer["manifest"]["url"].endswith("/v2.1.0/release-manifest.json"))
@@ -181,6 +192,11 @@ class StableReleaseTests(unittest.TestCase):
         )
         self.assertEqual("2.1.0", bundle["bundle_version"])
         self.assertEqual("stable", bundle["release_state"])
+        stable = json.loads(
+            (ROOT / "release" / "stable.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(EXPECTED_PEM_RAW_SHA256, stable["trust"]["pem"]["sha256"])
+        self.assertEqual(624, stable["trust"]["pem"]["size"])
 
 
 if __name__ == "__main__":

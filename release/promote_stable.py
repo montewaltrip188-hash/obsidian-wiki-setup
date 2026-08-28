@@ -76,6 +76,21 @@ def file_record(path: Path, name: str, url: str, expected: dict | None = None) -
     return record
 
 
+def raw_text_record(path: Path, name: str, url: str) -> dict:
+    """按 Git 文本对象的 LF 规范记录 raw/tag 文件，避免 checkout 换行污染。"""
+    if not path.is_file() or path.is_symlink():
+        raise PromoteError("STABLE_FILE_MISSING")
+    canonical = path.read_bytes().replace(b"\r\n", b"\n")
+    if b"\r" in canonical:
+        raise PromoteError("STABLE_TEXT_LINE_ENDING_INVALID")
+    return {
+        "name": name,
+        "sha256": hashlib.sha256(canonical).hexdigest(),
+        "size": len(canonical),
+        "url": url,
+    }
+
+
 def build_pointer(release_dir: Path, tag: str) -> dict:
     if not TAG.fullmatch(tag):
         raise PromoteError("STABLE_TAG_INVALID")
@@ -140,12 +155,12 @@ def build_pointer(release_dir: Path, tag: str) -> dict:
         "tag": tag,
         "trust": {
             "key_id": manifest["required_signature"]["key_id"],
-            "pem": file_record(
+            "pem": raw_text_record(
                 pem_path,
                 pem_path.name,
                 f"{raw_base}/{pem_path.name}",
             ),
-            "xml": file_record(
+            "xml": raw_text_record(
                 xml_path,
                 xml_path.name,
                 f"{raw_base}/{xml_path.name}",

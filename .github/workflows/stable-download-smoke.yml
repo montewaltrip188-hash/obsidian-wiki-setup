@@ -1,0 +1,38 @@
+name: stable 下载器 macOS 烟测
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-download-smoke-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: ${{ matrix.target }} 公开下载验收
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: macos-x64
+          - runner: macos-15
+            target: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: 检出当前主分支下载器
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: 从公开 stable 指针下载、验签并解压
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination="$RUNNER_TEMP/stable-download"
+          sh ./download-mac.sh "$destination"
+          test -f "$destination/Obsidian-LLM-Wiki-2.1.0/setup-mac.sh"

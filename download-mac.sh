@@ -4,7 +4,7 @@ set -eu
 repository='montewaltrip188-hash/obsidian-wiki-setup'
 stable_url="https://raw.githubusercontent.com/${repository}/main/release/stable.json"
 expected_key_id='c1f596094a9a54ada888502a2ab7ef6bc5fecf82d4281dd4bbae2ae7bc9d9938'
-expected_pem_sha256='3cb1a3fec3d028d57735bb576939bd0c49f7589aa2edd8ff61ac41f3d5cd0802'
+expected_pem_sha256='a350fcd7160d8ca6a06d73da95061ae026424eed5b4cfb13dd21eec8cd465d3b'
 destination_root="${1:-$HOME/Downloads}"
 temp_root="${TMPDIR:-/tmp}"
 work="$(mktemp -d "${temp_root%/}/obsidian-wiki-download.XXXXXX")"

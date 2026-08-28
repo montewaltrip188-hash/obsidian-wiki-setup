@@ -10,7 +10,7 @@ $Repository = 'montewaltrip188-hash/obsidian-wiki-setup'
 $StableUrl = "https://raw.githubusercontent.com/$Repository/main/release/stable.json"
 $ExpectedKeyId = 'c1f596094a9a54ada888502a2ab7ef6bc5fecf82d4281dd4bbae2ae7bc9d9938'
 $ExpectedXmlSha256 = '3ab5cb740f3e92d3230561fe231f0f761e5fa1c3c058483a2ed2a48071b4245b'
-$ExpectedPemSha256 = '3cb1a3fec3d028d57735bb576939bd0c49f7589aa2edd8ff61ac41f3d5cd0802'
+$ExpectedPemSha256 = 'a350fcd7160d8ca6a06d73da95061ae026424eed5b4cfb13dd21eec8cd465d3b'
 
 function Get-Sha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
