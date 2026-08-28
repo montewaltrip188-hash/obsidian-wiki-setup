@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 import sys
+import unicodedata
 import zipfile
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -40,16 +41,30 @@ INSTALLER_COMMON_REQUIRED = {
     "activation-public-key.xml",
     "contracts/deploy-manifest.schema.json",
     "contracts/install-candidate.schema.json",
+    "contracts/wiki-skill-lifecycle.json",
+    "extract-vault.py",
     "revoked-activation-ids.txt",
     "scripts/install-candidate.ps1",
+    "scripts/manage-wiki-skills.ps1",
+    "scripts/manage-wiki-skills.sh",
+    "tools/manage_wiki_skills.py",
 }
 INSTALLER_PLATFORM_REQUIRED = {
-    "windows": {"setup-win.ps1"},
-    "macos": {"setup-mac.sh"},
+    "windows": {
+        "change-model.bat",
+        "change-model.ps1",
+        "install.bat",
+        "setup-win.ps1",
+    },
+    "macos": {"change-model.sh", "setup-mac.sh"},
 }
 INSTALLER_COMMON_PAYLOAD = {
     "activation-public-key.xml",
+    "extract-vault.py",
     "revoked-activation-ids.txt",
+    "scripts/manage-wiki-skills.ps1",
+    "scripts/manage-wiki-skills.sh",
+    "tools/manage_wiki_skills.py",
 }
 INSTALLER_PLATFORM_PAYLOAD = {
     "windows": {
@@ -147,6 +162,10 @@ def validate_relative_path(path: str):
             raise CandidateError(f"跨平台不安全的 Git 路径：{path!r}")
 
 
+def collision_key(path: str) -> str:
+    return unicodedata.normalize("NFC", path).casefold()
+
+
 def validate_blob(source_name: str, path: str, content: bytes):
     lowered = path.casefold()
     if source_name == "installer" and lowered.endswith(".zip"):
@@ -184,10 +203,10 @@ def read_git_files(source_name: str, source, platform: str):
         except UnicodeDecodeError as exc:
             raise CandidateError(f"{source_name} 含非 UTF-8 路径") from exc
         validate_relative_path(path)
-        collision_key = path.casefold()
-        if collision_key in seen:
+        key = collision_key(path)
+        if key in seen:
             raise CandidateError(f"{source_name} 含大小写碰撞路径：{path}")
-        seen.add(collision_key)
+        seen.add(key)
         if object_type != "blob" or mode not in ("100644", "100755"):
             raise CandidateError(f"不支持的 Git 条目：{path}（mode={mode}）")
         content = git_bytes(repo, "cat-file", "blob", object_id)
@@ -267,7 +286,25 @@ def make_deploy_artifacts(product_files):
     return archive, deploy
 
 
-def deterministic_zip(staging: Path, records):
+def customer_path(record):
+    source = record["source"]
+    source_path = record["source_path"]
+    if source == "product":
+        return None
+    if source == "skill":
+        expected = f"payload/skills/claudecode-wiki-skills/{source_path}"
+        if record["path"] != expected:
+            raise CandidateError(f"Skill 映射路径无效：{record['path']}")
+        return f"skills/claudecode-wiki-skills/{source_path}"
+    if source == "installer":
+        expected = f"payload/installer/{source_path}"
+        if record["path"] != expected:
+            raise CandidateError(f"安装器映射路径无效：{record['path']}")
+        return source_path
+    raise CandidateError(f"未知候选来源：{source}")
+
+
+def make_customer_zip(staging: Path, records) -> bytes:
     entries = [
         ("manifest.json", (staging / "manifest.json").read_bytes(), "100644"),
         (
@@ -277,15 +314,26 @@ def deterministic_zip(staging: Path, records):
         ),
         ("vault.zip", (staging / "vault.zip").read_bytes(), "100644"),
     ]
-    entries.extend(
-        (
-            record["path"],
-            (staging / Path(record["path"])).read_bytes(),
-            record["mode"],
+    seen = {collision_key(path) for path, _, _ in entries}
+    customer_files = []
+    for record in records:
+        destination = customer_path(record)
+        if destination is None:
+            continue
+        validate_relative_path(destination)
+        key = collision_key(destination)
+        if key in seen:
+            raise CandidateError(f"客户候选含 Unicode/大小写路径碰撞：{destination}")
+        seen.add(key)
+        customer_files.append(
+            (
+                destination,
+                (staging / Path(record["path"])).read_bytes(),
+                record["mode"],
+            )
         )
-        for record in sorted(records, key=lambda item: item["path"])
-    )
-    (staging / "candidate.zip").write_bytes(make_zip_bytes(entries))
+    entries.extend(sorted(customer_files, key=lambda item: item[0]))
+    return make_zip_bytes(entries)
 
 
 def load_plan(path: Path):
@@ -314,10 +362,10 @@ def command_build(args):
             if not include_in_candidate(source_name, source_path, plan["platform"]):
                 continue
             destination = f"{SOURCE_PREFIXES[source_name]}/{source_path}"
-            collision_key = destination.casefold()
-            if collision_key in collision_keys:
+            key = collision_key(destination)
+            if key in collision_keys:
                 raise CandidateError(f"候选路径碰撞：{destination}")
-            collision_keys.add(collision_key)
+            collision_keys.add(key)
             collected.append((source_name, source_path, destination, mode, content))
 
     sources = {
@@ -372,7 +420,7 @@ def command_build(args):
     vault_archive, deploy_manifest = make_deploy_artifacts(product_files)
     (staging / "vault.zip").write_bytes(vault_archive)
     write_json(staging / "deploy-manifest.json", deploy_manifest)
-    deterministic_zip(staging, records)
+    (staging / "candidate.zip").write_bytes(make_customer_zip(staging, records))
 
 
 def command_verify(args):
@@ -428,8 +476,6 @@ def command_verify(args):
 
     expected_paths = set()
     expected_keys = set()
-    entries = [("manifest.json", manifest_bytes, "100644")]
-    product_files = []
     for record in records:
         if (
             not isinstance(record, dict)
@@ -449,13 +495,17 @@ def command_verify(args):
         relative = record["path"]
         validate_relative_path(relative)
         validate_relative_path(record["source_path"])
-        collision_key = relative.casefold()
-        if collision_key in expected_keys:
-            raise CandidateError(f"manifest.json 含大小写路径碰撞：{relative}")
+        key = collision_key(relative)
+        if key in expected_keys:
+            raise CandidateError(f"manifest.json 含 Unicode/大小写路径碰撞：{relative}")
         if not relative.startswith("payload/"):
             raise CandidateError(f"manifest.json 含越界路径：{relative}")
-        expected_keys.add(collision_key)
+        expected_keys.add(key)
         expected_paths.add(relative)
+
+    product_files = []
+    for record in records:
+        relative = record["path"]
         path = staging / Path(relative)
         if path.is_symlink() or not path.is_file():
             raise CandidateError(f"候选文件缺失或为链接：{relative}")
@@ -466,7 +516,6 @@ def command_verify(args):
             raise CandidateError(f"文件 SHA-256 不匹配：{relative}")
         if record.get("mode") not in ("100644", "100755"):
             raise CandidateError(f"文件 mode 无效：{relative}")
-        entries.append((relative, content, record["mode"]))
         if record.get("source") == "product":
             expected_product_path = f"payload/vault/{record.get('source_path', '')}"
             if relative != expected_product_path:
@@ -497,13 +546,7 @@ def command_verify(args):
         raise CandidateError("deploy-manifest.json 与产品 Git 对象不一致")
     if deploy_bytes != pretty_json_bytes(expected_deploy):
         raise CandidateError("deploy-manifest.json 不是规范化 JSON")
-    candidate_entries = [
-        entries[0],
-        ("deploy-manifest.json", deploy_bytes, "100644"),
-        ("vault.zip", actual_vault_archive, "100644"),
-    ]
-    candidate_entries.extend(sorted(entries[1:], key=lambda item: item[0]))
-    expected_archive = make_zip_bytes(candidate_entries)
+    expected_archive = make_customer_zip(staging, records)
     try:
         actual_archive = archive_path.read_bytes()
     except OSError as exc:

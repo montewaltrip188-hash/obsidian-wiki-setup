@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:PYTHONUTF8 = '1'
 $tool = Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\install_candidate.py'
 
 $python = Get-Command python -ErrorAction SilentlyContinue

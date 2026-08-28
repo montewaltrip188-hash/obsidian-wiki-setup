@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "tools" / "install_candidate.py"
+WRAPPER = ROOT / "scripts" / "install-candidate.ps1"
 
 
 def run(*args, cwd=None, check=True):
@@ -48,17 +49,53 @@ def make_repo(root: Path, name: str, files=None):
 def installer_contract_files():
     return {
         "activation-public-key.xml": "<RSAKeyValue>public only</RSAKeyValue>\n",
+        "change-model.bat": "@echo off\n",
+        "change-model.ps1": "Write-Output 'change model'\n",
+        "change-model.sh": "#!/bin/sh\necho change model\n",
         "contracts/install-candidate.schema.json": "{}\n",
         "contracts/deploy-manifest.schema.json": "{}\n",
+        "contracts/wiki-skill-lifecycle.json": "{}\n",
+        "extract-vault.py": "print('extract')\n",
+        "install.bat": "@echo off\n",
         "revoked-activation-ids.txt": "# none\n",
+        "scripts/manage-wiki-skills.ps1": "Write-Output 'manage'\n",
+        "scripts/manage-wiki-skills.sh": "#!/bin/sh\necho manage\n",
         "scripts/install-candidate.ps1": "Write-Output 'maintainer wrapper'\n",
         "setup-mac.sh": "#!/bin/sh\necho install\n",
         "setup-win.ps1": "Write-Output 'install'\n",
         "tests/not-customer-payload.txt": "maintenance only\n",
+        "tools/manage_wiki_skills.py": "print('manage')\n",
     }
 
 
 class InstallCandidateCliTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("pwsh"), "需要 PowerShell 7")
+    def test_powershell_wrapper_forces_utf8_for_python_errors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            product, _, _ = make_repo(root, "product")
+            skill, skill_commit, _ = make_repo(root, "skill")
+            installer, installer_commit, _ = make_repo(root, "installer")
+            environment = os.environ.copy()
+            environment.pop("PYTHONUTF8", None)
+            environment.pop("PYTHONIOENCODING", None)
+            failed = subprocess.run(
+                [
+                    "pwsh", "-NoProfile", "-File", str(WRAPPER), "plan",
+                    "--product-repo", str(product), "--product-ref", "HEAD",
+                    "--skill-repo", str(skill), "--skill-ref", skill_commit,
+                    "--installer-repo", str(installer), "--installer-ref", installer_commit,
+                    "--platform", "windows", "--output", str(root / "plan.json"),
+                ],
+                check=False,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                env=environment,
+            )
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("40 位", failed.stderr)
+
     def test_plan_rejects_branch_and_abbreviated_refs(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -237,6 +274,48 @@ class InstallCandidateCliTests(unittest.TestCase):
             with zipfile.ZipFile(first / "vault.zip") as archive:
                 self.assertTrue(archive.namelist())
                 self.assertTrue(all(name.startswith("vault/") for name in archive.namelist()))
+            extracted = root / "customer-extracted"
+            with zipfile.ZipFile(first / "candidate.zip") as archive:
+                names = archive.namelist()
+                archive.extractall(extracted)
+            for required in (
+                "manifest.json",
+                "deploy-manifest.json",
+                "vault.zip",
+                "setup-win.ps1",
+                "install.bat",
+                "change-model.bat",
+                "change-model.ps1",
+                "activation-public-key.xml",
+                "revoked-activation-ids.txt",
+                "extract-vault.py",
+                "tools/manage_wiki_skills.py",
+                "scripts/manage-wiki-skills.ps1",
+                "scripts/manage-wiki-skills.sh",
+                "contracts/deploy-manifest.schema.json",
+                "skills/claudecode-wiki-skills/core/design-juan-wiki/SKILL.md",
+            ):
+                self.assertTrue((extracted / required).is_file(), required)
+            self.assertFalse(any(name.startswith("payload/") for name in names))
+            self.assertFalse(any(name.startswith("vault/") for name in names))
+
+            mac_plan = root / "mac-plan.json"
+            mac_staging = root / "candidate-macos"
+            run(
+                sys.executable, CLI, "plan",
+                "--product-repo", product, "--product-ref", product_commit,
+                "--skill-repo", skill, "--skill-ref", skill_commit,
+                "--installer-repo", installer, "--installer-ref", installer_commit,
+                "--platform", "macos", "--output", mac_plan,
+            )
+            run(sys.executable, CLI, "build", "--plan", mac_plan, "--staging", mac_staging)
+            with zipfile.ZipFile(mac_staging / "candidate.zip") as archive:
+                mac_names = set(archive.namelist())
+            self.assertIn("setup-mac.sh", mac_names)
+            self.assertIn("change-model.sh", mac_names)
+            self.assertNotIn("setup-win.ps1", mac_names)
+            self.assertNotIn("install.bat", mac_names)
+            self.assertNotIn("change-model.ps1", mac_names)
             manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
             self.assertRegex(manifest["candidate_id"], r"^[0-9a-f]{64}$")
             self.assertEqual(manifest["default_skills"], [
@@ -475,7 +554,7 @@ class InstallCandidateCliTests(unittest.TestCase):
             )
             run(sys.executable, CLI, "build", "--plan", plan, "--staging", original)
 
-            for case in ("traversal", "absolute", "collision"):
+            for case in ("traversal", "absolute", "collision", "unicode_collision"):
                 with self.subTest(case=case):
                     staging = root / f"candidate-{case}"
                     shutil.copytree(original, staging)
@@ -485,8 +564,11 @@ class InstallCandidateCliTests(unittest.TestCase):
                         manifest["files"][0]["path"] = "payload/../escape"
                     elif case == "absolute":
                         manifest["files"][0]["path"] = "/absolute/escape"
-                    else:
+                    elif case == "collision":
                         manifest["files"][1]["path"] = manifest["files"][0]["path"].upper()
+                    else:
+                        manifest["files"][0]["path"] = "payload/vault/caf\u00e9.md"
+                        manifest["files"][1]["path"] = "payload/vault/cafe\u0301.md"
                     identity = dict(manifest)
                     identity.pop("candidate_id")
                     manifest["candidate_id"] = hashlib.sha256(
@@ -509,7 +591,7 @@ class InstallCandidateCliTests(unittest.TestCase):
                         sys.executable, CLI, "verify", "--staging", staging, check=False
                     )
                     self.assertNotEqual(failed.returncode, 0)
-                    if case == "collision":
+                    if case in ("collision", "unicode_collision"):
                         self.assertIn("碰撞", failed.stderr)
 
 

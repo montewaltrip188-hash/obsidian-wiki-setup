@@ -6,7 +6,7 @@
 - `build`：只读取已绑定 commit 的 Git blob，并且只写入一个尚不存在的 staging 目录。
 - `verify`：重新计算候选 ID、逐文件 SHA-256 和确定性 ZIP，发现文件集合或任一字节变化即失败。
 
-## 候选布局
+## staging 证据布局
 
 ```text
 staging/
@@ -20,7 +20,30 @@ staging/
     └── installer/
 ```
 
-产品仓库是 `payload/vault/` 的唯一来源。Skill 仓库以完整目录树进入候选，以保留核心 Skill 对共享 `references/` 和 `scripts/` 的相对引用；默认只发现三个核心 Skill，IMA 保持可选。安装器仓库提供安装入口，但旧 `vault.zip` 不能再作为产品来源。
+产品仓库是 `payload/vault/` 的唯一来源。Skill 仓库以完整目录树进入 staging，以保留核心 Skill 对共享 `references/` 和 `scripts/` 的相对引用；默认只发现三个核心 Skill，IMA 保持可选。安装器仓库提供安装入口，但旧 `vault.zip` 不能再作为产品来源。
+
+## 客户候选归档布局
+
+`candidate.zip` 不复制 staging 的 `payload/vault/` 或 `payload/installer/` 前缀。客户解压后可以从根目录直接运行平台入口：
+
+```text
+candidate.zip
+├── manifest.json
+├── deploy-manifest.json
+├── vault.zip
+├── setup-win.ps1 / setup-mac.sh
+├── install.bat / change-model.*
+├── activation-public-key.xml
+├── revoked-activation-ids.txt
+├── extract-vault.py
+├── tools/manage_wiki_skills.py
+├── scripts/manage-wiki-skills.ps1
+├── scripts/manage-wiki-skills.sh
+├── contracts/
+└── skills/claudecode-wiki-skills/
+```
+
+`payload/**` 只作为本地构建证据参与清单与 `verify`，不进入客户 ZIP。客户 ZIP 中的 Vault 只出现一次，即根目录的 `vault.zip`。
 
 `vault.zip` 是构建产物而不是仓库资产，只包含唯一顶层 `vault/`。`deploy-manifest.json` 是安装安全层的窄接口：
 
