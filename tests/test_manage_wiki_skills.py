@@ -58,6 +58,20 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         stream = result.stdout if expected == 0 else result.stderr
         return json.loads(stream)
 
+    def alias_claude_root_to_codex_root(self):
+        codex_root = self.home / ".agents" / "skills"
+        claude_root = self.home / ".claude" / "skills"
+        codex_root.mkdir(parents=True)
+        claude_root.parent.mkdir(parents=True)
+        if os.name == "nt":
+            result = subprocess.run(
+                ["cmd", "/d", "/c", "mklink", "/J", str(claude_root), str(codex_root)],
+                capture_output=True,
+            )
+            self.assertEqual(0, result.returncode, result.stderr or result.stdout)
+        else:
+            os.symlink(codex_root, claude_root, target_is_directory=True)
+
     def test_plan_is_read_only_and_defaults_to_three_core_skills(self):
         before = sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*"))
 
@@ -86,6 +100,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual("keyword", contract["defaults"]["offline_baseline"])
         self.assertIn("unknown_same_name_entry", contract["fail_closed_on"])
         self.assertIn("fingerprint_drift", contract["fail_closed_on"])
+        self.assertEqual("logical_runtime_to_owned_root", contract["ownership"]["runtime_aliases"])
 
     def test_unsafe_version_cannot_escape_version_directory(self):
         (self.source / "VERSION").write_text("..\n", encoding="utf-8")
@@ -321,6 +336,49 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         state = json.loads((package / "state.json").read_text(encoding="utf-8"))
         self.assertEqual("copy", state["entries"]["codex"]["design-juan-wiki"]["mode"])
         self.assertEqual("verified", self.run_cli("verify", "--home", self.home)["status"])
+
+    def test_runtime_root_alias_is_owned_once_across_full_lifecycle(self):
+        self.alias_claude_root_to_codex_root()
+
+        plan = self.run_cli("plan", "--source", self.source, "--home", self.home)
+        self.assertEqual({"codex": "codex", "claude": "codex"}, plan["runtime_aliases"])
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        package = self.home / ".agents" / "packages" / "claudecode-wiki-skills"
+        state = json.loads((package / "state.json").read_text(encoding="utf-8"))
+        self.assertEqual({"codex": "codex", "claude": "codex"}, state["runtime_aliases"])
+        self.assertEqual(["codex"], list(state["owned_roots"]))
+        self.assertEqual(["codex"], list(state["entries"]))
+        self.assertEqual("verified", self.run_cli("verify", "--home", self.home)["status"])
+
+        self._make_source("2.0.2")
+        (self.source / "core" / "design-juan-wiki" / "release.txt").write_text(
+            "2.0.2\n", encoding="utf-8"
+        )
+        self.assertEqual(
+            "upgraded",
+            self.run_cli("install", "--source", self.source, "--home", self.home)["status"],
+        )
+        self.assertEqual("rolled_back", self.run_cli("rollback", "--home", self.home)["status"])
+        self.assertEqual("verified", self.run_cli("verify", "--home", self.home)["status"])
+        self.assertEqual("uninstalled", self.run_cli("uninstall", "--home", self.home)["status"])
+        self.assertTrue((self.home / ".claude" / "skills").is_dir())
+        self.assertEqual([], list((self.home / ".agents" / "skills").iterdir()))
+
+    def test_verify_fails_closed_when_runtime_root_alias_drifted(self):
+        self.alias_claude_root_to_codex_root()
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        claude_root = self.home / ".claude" / "skills"
+        if os.name == "nt":
+            os.rmdir(claude_root)
+        else:
+            claude_root.unlink()
+        claude_root.mkdir()
+
+        blocked = self.run_cli("verify", "--home", self.home, expected=2)
+
+        self.assertEqual("blocked", blocked["status"])
+        self.assertIn("别名状态漂移", blocked["error"])
+        self.assertTrue((self.home / ".agents" / "skills" / "design-juan-wiki").exists())
 
 
 if __name__ == "__main__":

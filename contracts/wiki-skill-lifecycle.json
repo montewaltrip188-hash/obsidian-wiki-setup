@@ -32,6 +32,8 @@
   "ownership": {
     "state": "~/.agents/packages/claudecode-wiki-skills/state.json",
     "version_manifest": ".wiki-skill-install.json",
+    "runtime_aliases": "logical_runtime_to_owned_root",
+    "owned_roots": "one_entry_set_per_physical_root",
     "uninstall_policy": "manifest_owned_only"
   },
   "dependency_policy": {
@@ -47,6 +49,7 @@
     "root_is_not_directory",
     "fingerprint_drift",
     "link_target_drift",
+    "runtime_root_alias_drift",
     "version_content_collision",
     "skill_set_change_during_upgrade",
     "link_mode_migration",

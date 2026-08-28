@@ -71,6 +71,7 @@ def build_plan(args):
             raise LifecycleError(f"源包缺少 Skill 入口：{name}")
     if not (source / "core" / "wiki-hybrid-search" / "scripts" / "wiki_search.py").is_file():
         raise LifecycleError("源包缺少关键词 Query 入口脚本")
+    owned_roots, runtime_aliases = detect_runtime_layout(args.home.absolute())
     return {
         "status": "ready",
         "version": version,
@@ -80,6 +81,8 @@ def build_plan(args):
         **capability_receipt(False),
         "source": str(source),
         "home": str(args.home.absolute()),
+        "runtime_aliases": runtime_aliases,
+        "owned_roots": {owner: str(root) for owner, root in owned_roots.items()},
     }
 
 
@@ -135,10 +138,25 @@ def runtime_roots(home):
     }
 
 
-def preflight_roots(home, skills):
+def detect_runtime_layout(home):
+    owned_roots = {}
+    runtime_aliases = {}
+    identities = {}
     for runtime, root in runtime_roots(home).items():
+        identity = os.path.normcase(os.path.realpath(root))
+        owner = identities.get(identity)
+        if owner is None:
+            owner = runtime
+            identities[identity] = owner
+            owned_roots[owner] = root
+        runtime_aliases[runtime] = owner
+    return owned_roots, runtime_aliases
+
+
+def preflight_roots(owned_roots, skills):
+    for owner, root in owned_roots.items():
         if root.exists() and not root.is_dir():
-            raise LifecycleError(f"{runtime} Skill 根路径不是目录，拒绝替换：{root}")
+            raise LifecycleError(f"{owner} Skill 根路径不是目录，拒绝替换：{root}")
         for name in skills:
             destination = root / name
             if destination.exists() or destination.is_symlink():
@@ -224,6 +242,7 @@ def remove_owned_entry(path, mode):
 def install(args):
     plan = build_plan(args)
     home = args.home.absolute()
+    owned_roots = {owner: Path(path) for owner, path in plan["owned_roots"].items()}
     package = home / ".agents" / "packages" / PACKAGE_NAME
     version_root = package / "versions" / plan["version"]
     ensure_windows_path_budget(args.source.absolute(), package / "versions", plan["version"])
@@ -255,7 +274,7 @@ def install(args):
     else:
         if version_root.exists():
             raise LifecycleError("发现无状态版本目录，拒绝接管")
-        preflight_roots(home, plan["skills"])
+        preflight_roots(owned_roots, plan["skills"])
     if version_root.exists():
         raise LifecycleError("目标版本目录已存在，拒绝覆盖")
 
@@ -283,23 +302,23 @@ def install(args):
         staging.replace(version_root)
 
         if previous_state:
-            for runtime, configured in previous_state["entries"].items():
-                root = runtime_roots(home)[runtime]
+            for owner, configured in previous_state["entries"].items():
+                root = Path(previous_state["owned_roots"][owner])
                 for name, ownership in configured.items():
                     destination = root / name
                     remove_owned_entry(destination, ownership["mode"])
                     removed_previous.append((destination, ownership))
 
         entries = {}
-        for runtime, root in runtime_roots(home).items():
-            entries[runtime] = {}
+        for owner, root in owned_roots.items():
+            entries[owner] = {}
             for name in plan["skills"]:
                 destination = root / name
                 if previous_state:
                     mode = recreate_owned_entry(
                         entry_source(version_root, name),
                         destination,
-                        previous_state["entries"][runtime][name]["mode"],
+                        previous_state["entries"][owner][name]["mode"],
                     )
                 else:
                     mode = create_directory_link(
@@ -309,7 +328,7 @@ def install(args):
                         args.link_mode,
                     )
                 created_entries.append((destination, mode))
-                entries[runtime][name] = {
+                entries[owner][name] = {
                     "mode": mode,
                     "target": str(entry_source(version_root, name)),
                     "fingerprint": inventory(destination) if mode == "copy" else None,
@@ -327,6 +346,8 @@ def install(args):
                 else []
             ),
             "owned_skills": plan["skills"],
+            "runtime_aliases": plan["runtime_aliases"],
+            "owned_roots": plan["owned_roots"],
             "entries": entries,
         }
         atomic_json(state_path, state)
@@ -383,7 +404,12 @@ def verify(args):
     if inventory(version_root) != manifest.get("files"):
         raise LifecycleError("活动版本文件指纹漂移")
 
-    roots = runtime_roots(home)
+    roots, runtime_aliases = detect_runtime_layout(home)
+    expected_owned_roots = {owner: str(root) for owner, root in roots.items()}
+    if state.get("runtime_aliases") != runtime_aliases:
+        raise LifecycleError("运行时根目录别名状态漂移")
+    if state.get("owned_roots") != expected_owned_roots:
+        raise LifecycleError("唯一受管根目录状态漂移")
     configured_entries = state.get("entries", {})
     if set(configured_entries) != set(roots):
         raise LifecycleError("运行时入口所有权状态不完整")
@@ -440,20 +466,20 @@ def rollback(args):
     old_entries = []
     new_entries = []
     try:
-        for runtime, configured in state["entries"].items():
-            root = runtime_roots(home)[runtime]
+        for owner, configured in state["entries"].items():
+            root = Path(state["owned_roots"][owner])
             for name, ownership in configured.items():
                 destination = root / name
                 remove_owned_entry(destination, ownership["mode"])
                 old_entries.append((destination, ownership))
         entries = {}
-        for runtime, configured in state["entries"].items():
-            entries[runtime] = {}
+        for owner, configured in state["entries"].items():
+            entries[owner] = {}
             for name, ownership in configured.items():
-                destination = runtime_roots(home)[runtime] / name
+                destination = Path(state["owned_roots"][owner]) / name
                 mode = recreate_owned_entry(entry_source(target_root, name), destination, ownership["mode"])
                 new_entries.append((destination, mode))
-                entries[runtime][name] = {
+                entries[owner][name] = {
                     "mode": mode,
                     "target": str(entry_source(target_root, name)),
                     "fingerprint": inventory(destination) if mode == "copy" else None,
@@ -488,8 +514,8 @@ def uninstall(args):
         raise LifecycleError("安装包路径越界，拒绝卸载")
     removed = []
     try:
-        for runtime, configured in state["entries"].items():
-            root = runtime_roots(home)[runtime]
+        for owner, configured in state["entries"].items():
+            root = Path(state["owned_roots"][owner])
             for name, ownership in configured.items():
                 destination = root / name
                 remove_owned_entry(destination, ownership["mode"])
