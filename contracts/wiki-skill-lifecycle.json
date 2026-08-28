@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "component": "claudecode-wiki-skills",
+  "commands": [
+    "plan",
+    "install",
+    "verify",
+    "rollback",
+    "uninstall"
+  ],
+  "defaults": {
+    "scope": "user",
+    "skills": [
+      "design-juan-wiki",
+      "wiki-hybrid-search",
+      "ocr-and-documents"
+    ],
+    "ima_skill": "explicit_opt_in",
+    "offline_baseline": "keyword",
+    "keyword_runtime_ready": false,
+    "keyword_runtime_status": "blocked_missing_interpreter_and_locked_dependencies",
+    "keyword_runtime_error": "KEYWORD_RUNTIME_UNPROVISIONED",
+    "vector_capability": "optional",
+    "link_mode": "auto",
+    "copy_fallback": "explicit_opt_in"
+  },
+  "layout": {
+    "package_versions": "~/.agents/packages/claudecode-wiki-skills/versions/<version>",
+    "codex_entries": "~/.agents/skills/<skill>",
+    "claude_entries": "~/.claude/skills/<skill>"
+  },
+  "ownership": {
+    "state": "~/.agents/packages/claudecode-wiki-skills/state.json",
+    "version_manifest": ".wiki-skill-install.json",
+    "uninstall_policy": "manifest_owned_only"
+  },
+  "dependency_policy": {
+    "automatic_network_install": false,
+    "ready_requires": [
+      "isolated_interpreter",
+      "locked_dependency_bundle",
+      "keyword_query_runtime_test"
+    ]
+  },
+  "fail_closed_on": [
+    "unknown_same_name_entry",
+    "root_is_not_directory",
+    "fingerprint_drift",
+    "link_target_drift",
+    "version_content_collision",
+    "skill_set_change_during_upgrade",
+    "link_mode_migration",
+    "link_creation_without_copy_authorization",
+    "network_dependency_required",
+    "elevation_required"
+  ]
+}
