@@ -26,6 +26,7 @@ class ReleaseOrchestratorContractTests(unittest.TestCase):
         self.assertIn("orchestrator.py status", contract)
         self.assertIn("不 commit、tag、push", contract)
         self.assertIn("version_approval_required", contract)
+        self.assertIn("runtime_provisioning_required", contract)
 
 
 if __name__ == "__main__":

@@ -94,6 +94,26 @@ def make_three_repositories(root: Path):
     release = json.loads(installer_files["release/bundle-release.json"])
     release["wiki_skills_version"] = "2.1.0"
     installer_files["release/bundle-release.json"] = json.dumps(release) + "\n"
+    installer_files["contracts/wiki-skill-lifecycle.json"] = json.dumps(
+        {
+            "schema_version": 2,
+            "component": "claudecode-wiki-skills",
+            "defaults": {
+                "offline_baseline": "keyword",
+                "keyword_runtime_ready": False,
+                "keyword_runtime_status": "blocked_missing_interpreter_and_locked_dependencies",
+                "keyword_runtime_error": "KEYWORD_RUNTIME_UNPROVISIONED",
+            },
+            "dependency_policy": {
+                "automatic_network_install": False,
+                "ready_requires": [
+                    "isolated_interpreter",
+                    "locked_dependency_bundle",
+                    "keyword_query_runtime_test",
+                ],
+            },
+        }
+    ) + "\n"
     installer, installer_commit, installer_tree = make_repo(
         root, "installer", installer_files
     )
@@ -127,7 +147,12 @@ class ReleaseOrchestratorTests(unittest.TestCase):
             )
 
             self.assertEqual("planned", planned["status"])
-            self.assertEqual("version_approval_required", planned["next_action"])
+            self.assertEqual("runtime_provisioning_required", planned["next_action"])
+            self.assertEqual("blocked", planned["release_gates"]["keyword_runtime"]["status"])
+            self.assertEqual(
+                "KEYWORD_RUNTIME_UNPROVISIONED",
+                planned["release_gates"]["keyword_runtime"]["error"],
+            )
             self.assertRegex(planned["plan_id"], r"^[0-9a-f]{64}$")
             self.assertRegex(planned["receipt_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual({"windows", "macos"}, set(planned["candidates"]))
@@ -145,7 +170,7 @@ class ReleaseOrchestratorTests(unittest.TestCase):
             workspace_before = inventory(workspace)
             status = run_cli("status", "--workspace", workspace)
             self.assertEqual("planned", status["status"])
-            self.assertEqual("version_approval_required", status["next_action"])
+            self.assertEqual("runtime_provisioning_required", status["next_action"])
             self.assertEqual(workspace_before, inventory(workspace))
 
     def test_status_rejects_candidate_drift_without_rewriting_state(self):

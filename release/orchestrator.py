@@ -229,7 +229,26 @@ def plan_release(args: argparse.Namespace) -> dict:
         release_contract = json.loads(release_contract_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise OrchestratorError("BUNDLE_RELEASE_CONTRACT_INVALID") from exc
-    if release_contract.get("release_state") == "unreleased_candidate":
+    lifecycle_path = Path(clones["installer"]["clone"]) / "contracts" / "wiki-skill-lifecycle.json"
+    try:
+        lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+        defaults = lifecycle["defaults"]
+        dependency_policy = lifecycle["dependency_policy"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise OrchestratorError("WIKI_SKILL_LIFECYCLE_CONTRACT_INVALID") from exc
+    keyword_runtime_ready = defaults.get("keyword_runtime_ready") is True
+    release_gates = {
+        "keyword_runtime": {
+            "automatic_network_install": dependency_policy.get("automatic_network_install"),
+            "error": defaults.get("keyword_runtime_error"),
+            "offline_baseline": defaults.get("offline_baseline"),
+            "ready_requires": dependency_policy.get("ready_requires"),
+            "status": "ready" if keyword_runtime_ready else "blocked",
+        }
+    }
+    if not keyword_runtime_ready:
+        next_action = "runtime_provisioning_required"
+    elif release_contract.get("release_state") == "unreleased_candidate":
         next_action = "version_approval_required"
     else:
         next_action = "run_approval_required"
@@ -238,6 +257,7 @@ def plan_release(args: argparse.Namespace) -> dict:
         "candidates": candidates,
         "next_action": next_action,
         "orchestrator_format": 1,
+        "release_gates": release_gates,
         "release_state": release_contract.get("release_state"),
         "sources": {
             name: {key: value for key, value in clone.items() if key != "clone"}

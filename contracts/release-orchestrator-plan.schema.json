@@ -3,7 +3,7 @@
   "$id": "https://junyong.ai/contracts/release-orchestrator-plan.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["bundle_version", "candidates", "next_action", "orchestrator_format", "plan_id", "receipt_sha256", "release_state", "sources", "status"],
+  "required": ["bundle_version", "candidates", "next_action", "orchestrator_format", "plan_id", "receipt_sha256", "release_gates", "release_state", "sources", "status"],
   "properties": {
     "bundle_version": {"type": ["string", "null"]},
     "candidates": {
@@ -15,10 +15,29 @@
         "macos": {"type": "object"}
       }
     },
-    "next_action": {"enum": ["version_approval_required", "run_approval_required"]},
+    "next_action": {"enum": ["runtime_provisioning_required", "version_approval_required", "run_approval_required"]},
     "orchestrator_format": {"const": 1},
     "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "release_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyword_runtime"],
+      "properties": {
+        "keyword_runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["automatic_network_install", "error", "offline_baseline", "ready_requires", "status"],
+          "properties": {
+            "automatic_network_install": {"type": "boolean"},
+            "error": {"type": ["string", "null"]},
+            "offline_baseline": {"const": "keyword"},
+            "ready_requires": {"type": "array", "items": {"type": "string"}},
+            "status": {"enum": ["ready", "blocked"]}
+          }
+        }
+      }
+    },
     "release_state": {"enum": ["unreleased_candidate", "stable"]},
     "sources": {
       "type": "object",

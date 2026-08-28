@@ -110,7 +110,7 @@ U3 用 `scripts/joint-update.ps1`（Windows）或 `scripts/joint-update.sh`（ma
 
 ## D2：只读三仓发布计划
 
-维护者使用 `release/orchestrator.py plan` 冻结产品、Skill 与安装器的三个精确 40 位 commit。编排器只读来源仓库，在新建的外部 workspace 中建立 detached clone，为 Windows 与 macOS 各构建两次并验证字节可复现候选，最后写出带 seal 的 `release-plan.json`。`status` 只读检查 clone 与候选资产是否漂移。该阶段不 commit、tag、push、创建 Release、覆盖安装资产或更新 stable 指针；未分配 bundle 版本时只返回 `version_approval_required`。完整合同见 `contracts/release-orchestrator-v1.md`。
+维护者使用 `release/orchestrator.py plan` 冻结产品、Skill 与安装器的三个精确 40 位 commit。编排器只读来源仓库，在新建的外部 workspace 中建立 detached clone，为 Windows 与 macOS 各构建两次并验证字节可复现候选，最后写出带 seal 的 `release-plan.json`。`status` 只读检查 clone 与候选资产是否漂移。该阶段不 commit、tag、push、创建 Release、覆盖安装资产或更新 stable 指针；离线关键词 Query 运行时未就绪时优先返回 `runtime_provisioning_required`，运行时就绪后才允许进入 `version_approval_required`。完整合同见 `contracts/release-orchestrator-v1.md`。
 
 ## Skill 安装位置
 
