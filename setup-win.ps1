@@ -318,7 +318,13 @@ if (-not $skipApi) {
     Write-Host "  已选择: $providerName" -ForegroundColor Green
     Write-Host "  请输入你的 API Key" -ForegroundColor Yellow
     Write-Host "  (获取地址: $apiUrl)" -ForegroundColor Yellow
-    $apiKey = Read-Host "  API Key"
+    $secureApiKey = Read-Host "  API Key" -AsSecureString
+    $apiKeyBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureApiKey)
+    try {
+        $apiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($apiKeyBstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($apiKeyBstr)
+    }
 
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
         Write-Host "  [!] 未输入 API Key，跳过配置。稍后可手动编辑: $settingsPath" -ForegroundColor Yellow
@@ -356,20 +362,40 @@ if (-not [string]::IsNullOrWhiteSpace($customPath)) {
 }
 
 $vaultZip = Join-Path $repoRoot "vault.zip"
-$vaultManifest = Join-Path $repoRoot "install-manifest.json"
+$vaultManifest = Join-Path $repoRoot "deploy-manifest.json"
 $vaultDeployer = Join-Path $repoRoot "extract-vault.py"
+$skillSource = Join-Path $repoRoot "skills\claudecode-wiki-skills"
+$skillManager = Join-Path $repoRoot "tools\manage_wiki_skills.py"
 foreach ($requiredFile in @($vaultZip, $vaultManifest, $vaultDeployer)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         Write-Host "  [!] 缺少安全部署文件: $requiredFile" -ForegroundColor Red
         exit 1
     }
 }
+if (-not (Test-Path -LiteralPath $skillManager -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $skillSource -PathType Container)) {
+    Write-Host "  [!] 缺少 Wiki Skill 安装组件" -ForegroundColor Red
+    exit 1
+}
 $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
 if (-not $pythonCommand) {
     Write-Host "  [!] 安全部署需要 Python 3" -ForegroundColor Red
     exit 1
 }
+$env:PYTHONUTF8 = "1"
 
+# 在修改 Vault 前完成 Skill 冲突与所有权只读预检，避免半安装。
+$skillPlanOutput = & $pythonCommand.Source $skillManager plan `
+    --source $skillSource --home $env:USERPROFILE 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  [!] Wiki Skill 预检未通过：$($skillPlanOutput -join ' ')" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+$skillPlan = ($skillPlanOutput -join [Environment]::NewLine) | ConvertFrom-Json
+Write-Host "  Wiki Skill 预检完成：$($skillPlan.action)" -ForegroundColor Green
+
+$skipDeploy = $false
+$allowExistingVault = $false
 if (Test-Path -LiteralPath $defaultVaultPath) {
     Write-Host "  [!] 目录已存在: $defaultVaultPath" -ForegroundColor Yellow
     $overwrite = Read-Host "  是否先保留同级备份再升级？(y/N)"
@@ -382,6 +408,26 @@ if (Test-Path -LiteralPath $defaultVaultPath) {
 }
 
 if (-not $skipDeploy) {
+    Write-Step "安装 Wiki Skills..."
+    $skillInstallOutput = & $pythonCommand.Source $skillManager install `
+        --source $skillSource --home $env:USERPROFILE 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [!] Wiki Skill 安装失败：$($skillInstallOutput -join ' ')" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+    $skillInstall = ($skillInstallOutput -join [Environment]::NewLine) | ConvertFrom-Json
+    $skillVerifyOutput = & $pythonCommand.Source $skillManager verify `
+        --home $env:USERPROFILE 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [!] Wiki Skill 验收失败：$($skillVerifyOutput -join ' ')" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+    $skillVerify = ($skillVerifyOutput -join [Environment]::NewLine) | ConvertFrom-Json
+    Write-Host "  Wiki Skills 已安装并验收：$($skillVerify.skills -join ', ')" -ForegroundColor Green
+    if (-not $skillInstall.keyword_runtime_ready) {
+        Write-Host "  [!] 关键词 Query 运行时尚未随包提供：$($skillInstall.keyword_runtime_error)" -ForegroundColor Yellow
+    }
+
     Write-Host "  正在验证候选包并安全部署知识库..." -ForegroundColor Yellow
     $deployArgs = @(
         $vaultDeployer, "deploy",
@@ -393,7 +439,21 @@ if (-not $skipDeploy) {
         $deployArgs += "--allow-existing"
     }
     & $pythonCommand.Source @deployArgs
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $deployExit = $LASTEXITCODE
+    if ($deployExit -ne 0) {
+        $restoreCommand = switch ($skillPlan.action) {
+            "install" { "uninstall" }
+            "upgrade" { "rollback" }
+            default { $null }
+        }
+        if ($restoreCommand) {
+            & $pythonCommand.Source $skillManager $restoreCommand --home $env:USERPROFILE | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  [!] Vault 部署失败，Wiki Skill 自动恢复也失败，需要人工处理" -ForegroundColor Red
+            }
+        }
+        exit $deployExit
+    }
     Write-Host "  知识库已部署到: $defaultVaultPath" -ForegroundColor Green
 }
 

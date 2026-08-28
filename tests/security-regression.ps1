@@ -186,7 +186,7 @@ Test-Case "仓库只交付公钥并阻断签发侧私密产物" {
 
     $ignore = Get-Content -LiteralPath (Join-Path $repoRoot ".gitignore") -Raw
     $ignoreLines = @($ignore -split '\r?\n')
-    foreach ($pattern in @('activation-private-key*.xml', 'activation-private-key*.pem', 'activation-private-key*.pfx', 'activation-private-key*.key', 'issuer-private/', 'activation-codes.*', 'staging/', 'build/', 'dist/')) {
+    foreach ($pattern in @('activation-private-key*.xml', 'activation-private-key*.pem', 'activation-private-key*.pfx', 'activation-private-key*.key', 'issuer-private/', 'activation-codes.*', 'generate-secure-code.ps1', 'generate-short-code.ps1', 'staging/', 'build/', 'dist/')) {
         if ($ignoreLines -notcontains $pattern) {
             throw ".gitignore 缺少 $pattern"
         }
@@ -217,6 +217,17 @@ Test-Case "激活入口不再保留旧共享秘密并隐藏人工输入" {
     }
     if ($mac -notmatch 'read -r -s ACTIVATION_CODE') {
         throw "macOS 激活码输入未隐藏"
+    }
+}
+
+Test-Case "Windows 和 macOS 均隐藏 API Key 输入" {
+    $windows = Get-Content -LiteralPath (Join-Path $repoRoot "setup-win.ps1") -Raw
+    $mac = Get-Content -LiteralPath (Join-Path $repoRoot "setup-mac.sh") -Raw
+    if ($windows -notmatch 'Read-Host\s+"\s*API Key"\s+-AsSecureString') {
+        throw "Windows API Key 输入未隐藏"
+    }
+    if ($mac -notmatch 'read -r -s API_KEY') {
+        throw "macOS API Key 输入未隐藏"
     }
 }
 

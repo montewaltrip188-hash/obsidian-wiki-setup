@@ -1,79 +1,93 @@
-# Obsidian LLM Wiki 一键安装包
+# Obsidian LLM Wiki 安装与发行编排
 
-基于 [Karpathy LLM Wiki 方法论](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)，用 AI 帮你构建和维护个人知识库。
+本仓库是安装器与发行组装层，不再手工维护一份独立的 Vault 副本。
 
-## 包含内容
+安装候选由三个精确 Git commit 共同组成：
 
-- Obsidian 知识库模板（wiki 架构 + CLAUDE.md Schema）
-- 39 个精选插件（含 Claudian、Dataview、Excalidraw 等）
-- 100+ 模板
-- 3 篇使用指南
+- 产品仓库：提供完整 Vault，是 Vault 文件的唯一来源；
+- `claudecode-wiki-skills`：提供 Wiki Skill 完整版本树；
+- 本安装器仓库：提供激活、组装、验证、部署和回滚入口。
 
-## 安装前准备
+当前 D0 验收基线为产品提交 `4ea70aaf2fd8a13e5eb455263d5214f8dc5bb6eb`，以及 Wiki Skill `v2.0.1` 发布后提交 `b83e321457211c65eb26200ddcb97f45af66c160`。
 
-1. **下载并安装 [Obsidian](https://obsidian.md/download)**（如果还没装）
-2. **购买 DeepSeek API**：前往 https://platform.deepseek.com ，充值 10 元（约可用 10 天）
-3. **从本仓库的公开 Release 下载压缩包**，解压到任意目录。下载脚本不需要也不会携带访问令牌
+## 默认交付内容
 
-## 激活与密钥安全
+- 产品仓库精确 commit 对应的 Obsidian Vault；
+- 三个核心 Skill：`design-juan-wiki`、`wiki-hybrid-search`、`ocr-and-documents`；
+- `ima-skill` 仅在显式选择时安装；
+- Windows 或 macOS 对应平台的安装入口；
+- 逐文件 SHA-256、来源 commit、tree 和候选 ID 清单。
 
-- 安装器只接受 `WIKI2.<payload>.<signature>` 格式的 RSA 签名激活码，旧版共享秘密格式不再兼容。
-- Windows 和 macOS 均隐藏激活码输入，并校验签名、产品、版本、有效期和撤销 ID。
-- 客户端包只包含 `activation-public-key.xml` 公钥和撤销清单，不包含签发私钥或批量签发产物。
-- 签发私钥必须保存在仓库目录之外；一旦私钥泄露，应轮换密钥并重新发布客户端公钥。
+安装器不再额外夹带产品仓库中不存在的“100+ 模板”“3 篇使用指南”或旧 `.claude` Skills。
 
-## 一键安装
+## 发行候选构建
 
-### Windows
+维护者使用 `plan → build → verify` 三个公共接缝：
 
-1. 解压下载的 zip 文件
-2. 右键 `setup-win.ps1` → **使用 PowerShell 运行**
-   - 如果提示执行策略限制，在 PowerShell 中运行：
-     ```powershell
-     powershell -ExecutionPolicy Bypass -File setup-win.ps1
-     ```
-3. 按提示输入 DeepSeek API Key，等待安装完成
+```powershell
+./scripts/install-candidate.ps1 plan `
+  --product-repo <产品仓库> --product-ref <40位commit> `
+  --skill-repo <Skill仓库> --skill-ref <40位commit> `
+  --installer-repo <安装器仓库> --installer-ref <40位commit> `
+  --platform windows --output plan.json
 
-### Mac
-
-1. 解压下载的 zip 文件
-2. 打开终端，进入解压目录，执行：
-   ```bash
-   chmod +x setup-mac.sh && ./setup-mac.sh
-   ```
-3. 按提示输入 DeepSeek API Key，等待安装完成
-
-## 安装后
-
-1. 打开 Obsidian → **打开文件夹作为库** → 选择安装时指定的目录（默认 `文档/ObsidianVault`）
-2. 弹出「信任此库的插件」时点击 **信任并启用**
-3. 阅读库中「使用指南」文件夹的三篇文档：
-   - LLM Wiki 知识库使用指南
-   - Obsidian 入门指南
-   - Obsidian 插件速查手册
-
-## 知识库架构
-
-```
-vault/
-├── raw/          # 原始素材（剪藏的文章、笔记）
-├── wiki/         # AI 生成和维护的知识库
-│   ├── sources/      # 素材摘要
-│   ├── entities/     # 实体（人物、工具）
-│   ├── concepts/     # 概念（理论、方法论）
-│   └── comparisons/  # 对比分析
-├── output/       # AI 问答产物
-├── 使用指南/      # 入门文档
-└── CLAUDE.md     # AI 操作规范
+./scripts/install-candidate.ps1 build --plan plan.json --staging candidate
+./scripts/install-candidate.ps1 verify --staging candidate
 ```
 
-## 常见问题
+相同输入必须生成相同的 `candidate.zip` 和 `vault.zip`。Builder 只读取 Git object，不读取源仓库的 dirty 或 untracked 文件；旧 `vault.zip`、tracked ZIP、私钥、下载令牌、LFS 指针和危险路径都会使构建失败。
 
-**Q: API Key 在哪获取？**
-A: https://platform.deepseek.com → 注册 → API Keys → 创建
+## 客户安装边界
 
-**Q: 安装脚本报错怎么办？**
-A: 截图错误信息发给我，远程帮你解决
+解压 `candidate.zip` 后，平台入口、`vault.zip`、部署清单、Skill 包和安装工具都位于候选根目录：
 
-**Q: 可以用其他 AI 模型吗？**
-A: 可以，修改 `~/.claude/settings.json` 中的模型配置即可
+```text
+candidate/
+├── setup-win.ps1 / setup-mac.sh
+├── vault.zip
+├── deploy-manifest.json
+├── extract-vault.py
+├── activation-public-key.xml
+├── tools/manage_wiki_skills.py
+└── skills/claudecode-wiki-skills/
+```
+
+Vault 部署流程固定为：
+
+```text
+验证 manifest 与归档
+→ 安全检查 ZIP 路径
+→ 同级 staging 解压
+→ 验证解压树摘要
+→ 必要时保留原 Vault backup
+→ 原子切换
+→ 独立验收
+```
+
+已有 Vault 默认拒绝覆盖。只有用户显式同意时才先生成同级备份；成功后备份仍保留，清理必须使用绑定回执的独立命令。
+
+## Skill 安装位置
+
+Wiki Skill 使用用户级版本化安装：
+
+```text
+~/.agents/packages/claudecode-wiki-skills/versions/<version>/
+~/.agents/skills/<skill>
+~/.claude/skills/<skill>
+```
+
+Claude Code 与 Codex 指向同一份物理版本树。安装器支持 `plan / install / verify / rollback / uninstall`，不会替换整个 Skill 根目录；发现同名未知入口、指纹漂移或所有权不完整时会停止。
+
+## 激活与下载安全
+
+- 客户端仅接受 `WIKI2.<payload>.<signature>` RSA 公钥签名激活码；
+- 客户包只含公钥，私钥和签发工具不得进入本仓库或候选；
+- 下载脚本不包含 Gitee token、API Key 或其他客户端凭据；
+- 激活码与 API Key 的交互输入均隐藏；
+- 公开离线激活可以防止从客户包反推出合法激活码，但不能阻止有能力的用户修改本地脚本绕过验证。
+
+## 当前发布门禁
+
+D0 本地候选尚未达到公开发布条件：Wiki Skill 已能安装和发现，但关键词 Query 仍需要 Python 解释器以及锁定的 `requests / jieba / numpy` 依赖包。安装器不会在后台自动联网安装依赖，当前能力回执会明确返回 `KEYWORD_RUNTIME_UNPROVISIONED`；向量检索继续保持可选。
+
+在确定跨平台离线 Python 运行时方案、发行版本号并完成独立安装验收前，不应把本候选标记为 stable，也不应让历史 v2.1 下载脚本冒充新的跨仓库候选。

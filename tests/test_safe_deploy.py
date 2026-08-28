@@ -354,13 +354,28 @@ class SafeDeployTests(unittest.TestCase):
         mac = (REPO_ROOT / "setup-mac.sh").read_text(encoding="utf-8")
         for label, content in (("Windows", windows), ("macOS", mac)):
             self.assertIn("extract-vault.py", content, label)
-            self.assertIn("install-manifest.json", content, label)
+            self.assertIn("deploy-manifest.json", content, label)
+            self.assertNotIn("install-manifest.json", content, label)
             self.assertRegex(content, r"\bdeploy\b", label)
             self.assertIn("--allow-existing", content, label)
         self.assertNotIn("Expand-Archive", windows)
         self.assertNotIn("Remove-Item $defaultVaultPath -Recurse", windows)
         self.assertNotIn("rm -rf \"$DEFAULT_VAULT\"", mac)
         self.assertNotIn("zipfile.ZipFile", mac)
+
+    def test_platform_setup_scripts_install_and_verify_three_core_skills(self) -> None:
+        windows = (REPO_ROOT / "setup-win.ps1").read_text(encoding="utf-8")
+        mac = (REPO_ROOT / "setup-mac.sh").read_text(encoding="utf-8")
+        for label, content in (("Windows", windows), ("macOS", mac)):
+            self.assertIn("manage_wiki_skills.py", content, label)
+            self.assertIn("claudecode-wiki-skills", content, label)
+            self.assertRegex(content, r"\binstall\b", label)
+            self.assertRegex(content, r"\bverify\b", label)
+            self.assertRegex(content, r"\brollback\b", label)
+            self.assertRegex(content, r"\buninstall\b", label)
+            self.assertNotIn("--include-ima", content, label)
+        self.assertLess(windows.index("$skillManager install"), windows.index('$vaultDeployer, "deploy"'))
+        self.assertLess(mac.index('"$SKILL_MANAGER" install'), mac.index('"$VAULT_DEPLOYER" deploy'))
 
 
 if __name__ == "__main__":

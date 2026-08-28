@@ -1,4 +1,6 @@
 generate-code.ps1
+generate-secure-code.ps1
+generate-short-code.ps1
 
 # 签发侧私密材料与批量签发产物绝不能进入客户端仓库
 activation-private-key*.xml

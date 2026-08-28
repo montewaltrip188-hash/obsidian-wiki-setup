@@ -337,7 +337,8 @@ if [ "$SKIP_API" = false ]; then
     yellow "  请输入你的 API Key"
     yellow "  (获取地址: $API_URL)"
     printf "  API Key: "
-    read -r API_KEY
+    read -r -s API_KEY
+    echo
 
     if [ -z "$API_KEY" ]; then
         yellow "  未输入 API Key，跳过配置。稍后可手动编辑: $SETTINGS_PATH"
@@ -375,14 +376,20 @@ if [ -n "$CUSTOM_PATH" ]; then
 fi
 
 VAULT_ZIP="$SCRIPT_DIR/vault.zip"
-VAULT_MANIFEST="$SCRIPT_DIR/install-manifest.json"
+VAULT_MANIFEST="$SCRIPT_DIR/deploy-manifest.json"
 VAULT_DEPLOYER="$SCRIPT_DIR/extract-vault.py"
+SKILL_SOURCE="$SCRIPT_DIR/skills/claudecode-wiki-skills"
+SKILL_MANAGER="$SCRIPT_DIR/tools/manage_wiki_skills.py"
 for required_file in "$VAULT_ZIP" "$VAULT_MANIFEST" "$VAULT_DEPLOYER"; do
     if [ ! -f "$required_file" ]; then
         red "  缺少安全部署文件: $required_file"
         exit 1
     fi
 done
+if [ ! -f "$SKILL_MANAGER" ] || [ ! -d "$SKILL_SOURCE" ]; then
+    red "  缺少 Wiki Skill 安装组件"
+    exit 1
+fi
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
 elif command -v python >/dev/null 2>&1; then
@@ -391,6 +398,16 @@ else
     red "  安全部署需要 Python 3"
     exit 1
 fi
+
+# 在修改 Vault 前完成 Skill 冲突与所有权只读预检，避免半安装。
+if ! SKILL_PLAN=$("$PYTHON_BIN" "$SKILL_MANAGER" plan \
+    --source "$SKILL_SOURCE" --home "$HOME" 2>&1); then
+    red "  Wiki Skill 预检未通过: $SKILL_PLAN"
+    exit 1
+fi
+SKILL_ACTION=$(printf '%s' "$SKILL_PLAN" | "$PYTHON_BIN" -c \
+    'import json,sys; print(json.load(sys.stdin)["action"])')
+green "  Wiki Skill 预检完成: $SKILL_ACTION"
 
 SKIP_DEPLOY=false
 ALLOW_EXISTING_VAULT=false
@@ -407,6 +424,25 @@ if [ -e "$DEFAULT_VAULT" ] || [ -L "$DEFAULT_VAULT" ]; then
 fi
 
 if [ "$SKIP_DEPLOY" = false ]; then
+    step "安装 Wiki Skills..."
+    if ! SKILL_INSTALL=$("$PYTHON_BIN" "$SKILL_MANAGER" install \
+        --source "$SKILL_SOURCE" --home "$HOME" 2>&1); then
+        red "  Wiki Skill 安装失败: $SKILL_INSTALL"
+        exit 1
+    fi
+    if ! SKILL_VERIFY=$("$PYTHON_BIN" "$SKILL_MANAGER" verify --home "$HOME" 2>&1); then
+        red "  Wiki Skill 验收失败: $SKILL_VERIFY"
+        exit 1
+    fi
+    SKILL_NAMES=$(printf '%s' "$SKILL_VERIFY" | "$PYTHON_BIN" -c \
+        'import json,sys; print(", ".join(json.load(sys.stdin)["skills"]))')
+    KEYWORD_READY=$(printf '%s' "$SKILL_INSTALL" | "$PYTHON_BIN" -c \
+        'import json,sys; print(str(json.load(sys.stdin)["keyword_runtime_ready"]).lower())')
+    green "  Wiki Skills 已安装并验收: $SKILL_NAMES"
+    if [ "$KEYWORD_READY" != "true" ]; then
+        yellow "  关键词 Query 运行时尚未随包提供: KEYWORD_RUNTIME_UNPROVISIONED"
+    fi
+
     yellow "  正在验证候选包并安全部署知识库..."
     DEPLOY_ARGS=(
         "$VAULT_DEPLOYER" deploy
@@ -417,8 +453,22 @@ if [ "$SKIP_DEPLOY" = false ]; then
     if [ "$ALLOW_EXISTING_VAULT" = true ]; then
         DEPLOY_ARGS+=(--allow-existing)
     fi
-    "$PYTHON_BIN" "${DEPLOY_ARGS[@]}"
-    green "  知识库部署完成"
+    if "$PYTHON_BIN" "${DEPLOY_ARGS[@]}"; then
+        green "  知识库部署完成"
+    else
+        DEPLOY_EXIT=$?
+        RESTORE_COMMAND=""
+        case "$SKILL_ACTION" in
+            install) RESTORE_COMMAND="uninstall" ;;
+            upgrade) RESTORE_COMMAND="rollback" ;;
+        esac
+        if [ -n "$RESTORE_COMMAND" ]; then
+            if ! "$PYTHON_BIN" "$SKILL_MANAGER" "$RESTORE_COMMAND" --home "$HOME" >/dev/null; then
+                red "  Vault 部署失败，Wiki Skill 自动恢复也失败，需要人工处理"
+            fi
+        fi
+        exit "$DEPLOY_EXIT"
+    fi
 fi
 
 # ----------------------------------------------------------
