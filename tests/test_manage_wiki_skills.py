@@ -52,6 +52,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
     def _make_runtime_source(self):
         files = {
             "python/python.exe": b"fixture isolated python\n",
+            "python/Lib/__pycache__/fixture.cpython-312.pyc": b"locked runtime bytecode\n",
             "python/Lib/site-packages/jieba/__init__.py": b"__version__ = '0.42.1'\n",
             "python/Lib/site-packages/numpy/__init__.py": b"__version__ = '2.5.2'\n",
             "python/Lib/site-packages/requests/__init__.py": b"__version__ = '2.34.2'\n",

@@ -802,7 +802,6 @@ def install_locked(args, transaction_id):
         shutil.copytree(
             args.runtime_source.absolute(),
             staging / RUNTIME_DIRECTORY,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
         manifest = {
             "schema_version": 1,
