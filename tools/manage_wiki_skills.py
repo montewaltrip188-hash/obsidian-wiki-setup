@@ -774,8 +774,11 @@ def load_state(home):
         raise LifecycleError("安装状态合同不兼容")
     schema_version = state.get("schema_version")
     if schema_version == 1:
-        if "install_generation" in state:
-            raise LifecycleError("schema v1 不允许 install_generation，拒绝伪装旧状态")
+        legacy_generation = state.get("install_generation")
+        if legacy_generation is not None and not re.fullmatch(
+            r"[0-9a-f]{32}", str(legacy_generation)
+        ):
+            raise LifecycleError("schema v1 的过渡 generation 不合法")
     elif schema_version == 2:
         if not re.fullmatch(
             r"[0-9a-f]{32}", str(state.get("install_generation", ""))
@@ -991,7 +994,12 @@ def undo_migration_locked(home, receipt):
         not isinstance(before_state, dict)
         or not isinstance(after_state, dict)
         or before_state.get("schema_version") != 1
-        or "install_generation" in before_state
+        or (
+            before_state.get("install_generation") is not None
+            and not re.fullmatch(
+                r"[0-9a-f]{32}", str(before_state.get("install_generation"))
+            )
+        )
         or after_state.get("schema_version") != 2
         or before.get("active_version") != after.get("active_version")
     ):

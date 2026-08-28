@@ -273,7 +273,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         self.assertEqual(before, self.snapshot_home())
         self.assertEqual(legacy_bytes, state_path.read_bytes())
 
-    def test_v1_with_generation_is_rejected_without_writes(self):
+    def test_transitional_v1_with_valid_generation_is_read_only_compatible_and_migrates(self):
         self.run_cli("install", "--source", self.source, "--home", self.home)
         state_path = (
             self.home / ".agents" / "packages" / "claudecode-wiki-skills" / "state.json"
@@ -285,11 +285,53 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         )
         before = self.snapshot_home()
 
+        plan = self.run_cli(
+            "plan", "--source", self.source, "--home", self.home
+        )
+        verified = self.run_cli("verify", "--home", self.home)
+
+        self.assertEqual("already_installed", plan["action"])
+        self.assertEqual(1, verified["state_schema_version"])
+        self.assertEqual(before, self.snapshot_home())
+
+        migrated = self.run_cli(
+            "install", "--source", self.source, "--home", self.home
+        )
+        current = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual("migrated", migrated["status"])
+        self.assertEqual(2, current["schema_version"])
+        self.assertEqual(migrated["transaction_id"], current["install_generation"])
+
+        undone = self.run_cli(
+            "undo",
+            "--home",
+            self.home,
+            "--receipt",
+            migrated["undo_receipt"],
+        )
+        restored = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual("undone", undone["status"])
+        self.assertEqual(state, restored)
+        self.assertEqual(1, self.run_cli("verify", "--home", self.home)["state_schema_version"])
+
+    def test_v1_with_invalid_generation_is_rejected_without_writes(self):
+        self.run_cli("install", "--source", self.source, "--home", self.home)
+        state_path = (
+            self.home / ".agents" / "packages" / "claudecode-wiki-skills" / "state.json"
+        )
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["schema_version"] = 1
+        state["install_generation"] = "not-a-valid-transaction-id"
+        state_path.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        before = self.snapshot_home()
+
         blocked = self.run_cli(
             "plan", "--source", self.source, "--home", self.home, expected=2
         )
 
-        self.assertIn("schema v1", blocked["error"])
+        self.assertIn("generation", blocked["error"])
         self.assertEqual(before, self.snapshot_home())
 
     def test_machine_readable_contract_freezes_public_seams_and_manual_gates(self):
@@ -354,7 +396,7 @@ class WikiSkillLifecycleTest(unittest.TestCase):
         )
         self.assertEqual(2, contract["ownership"]["state_schema_version"])
         self.assertEqual(
-            "read_only_compatible_without_generation",
+            "read_only_compatible_with_optional_valid_generation",
             contract["ownership"]["legacy_schema_v1"],
         )
         self.assertEqual(
