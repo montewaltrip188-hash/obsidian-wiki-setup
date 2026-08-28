@@ -200,7 +200,9 @@ class VaultUpdateStatusTests(unittest.TestCase):
             receipt = run_cli("status", "--vault", vault)
 
             self.assertEqual("managed", receipt["status"])
-            self.assertEqual("synthetic-vault-001", receipt["product_state"]["vault_id"])
+            self.assertEqual(
+                "synthetic-vault-001", receipt["product_state"]["vault_id"]
+            )
             self.assertEqual(before, inventory(vault))
 
 

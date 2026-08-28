@@ -90,7 +90,13 @@ Vault 部署流程固定为：
 
 `plan` 只读取产品管理路径，输出三方差异、逐文件哈希、审批标记和稳定 `plan_id`；客户知识、日志、输出、索引、密钥和本地状态均不扫描、不修改。旧客户缺少 `.juanyong-ai/product-state.json` 时只返回 `legacy_adoption_required`，不会自动写入状态或擅自纳管。
 
-当前仓库内的 `release/bundle-release.json` 故意保持 `unreleased_candidate` 且不分配版本。Builder 会把它与三仓精确来源合成为客户候选根目录的 `bundle-manifest.json`，避免让仓库内文件自引用尚未产生的 commit 或 candidate ID。版本获批并把发布合同切换为 `stable` 前，`check` 和 `plan` 会以 `BUNDLE_VERSION_UNASSIGNED` 停止。U1 没有 `apply` 命令。完整合同见 `contracts/read-only-vault-update-v1.md`。
+当前仓库内的 `release/bundle-release.json` 故意保持 `unreleased_candidate` 且不分配版本。Builder 会把它与三仓精确来源合成为客户候选根目录的 `bundle-manifest.json`，避免让仓库内文件自引用尚未产生的 commit 或 candidate ID。版本获批并把发布合同切换为 `stable` 前，`check`、`plan` 和 `apply` 都会以 `BUNDLE_VERSION_UNASSIGNED` 停止。U1 的只读边界见 `contracts/read-only-vault-update-v1.md`。
+
+## U2：审批绑定的事务更新
+
+U2 在 U1 的只读判断之后增加 `fresh-install / apply / verify / rollback`。Fresh Install 只为与产品树完全一致的新 Vault 建立 `.juanyong-ai/product-state.json`，Base ZIP、事务锁、备份和回执全部位于 Vault 外部缓存。`apply` 会重新计算并锁定 `plan_id`、路径策略、产品状态和逐文件 `change_sha256`，只接受与全部可执行变更精确一致的审批；删除还需要单独的 `allow_deletes`。冲突、过期计划、错误审批、缓存损坏或并发锁都会在写 Vault 前停止。
+
+事务写入使用同目录临时文件加原子替换。任一步骤失败会按写前备份恢复；回滚本身也先验证回执与完整备份、保护当前目标态，再执行事务恢复。客户内容目录不扫描、不备份、不修改。完整命令、回执和故障语义见 `contracts/vault-update-transaction-v1.md`。
 
 ## Skill 安装位置
 

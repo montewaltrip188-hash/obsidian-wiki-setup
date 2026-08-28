@@ -52,6 +52,8 @@ INSTALLER_COMMON_REQUIRED = {
     "contracts/update-path-policy.schema.json",
     "contracts/product-state.schema.json",
     "contracts/update-plan.schema.json",
+    "contracts/update-approval.schema.json",
+    "contracts/update-transaction-receipt.schema.json",
     "extract-vault.py",
     "revoked-activation-ids.txt",
     "scripts/install-candidate.ps1",

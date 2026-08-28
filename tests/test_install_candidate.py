@@ -62,6 +62,8 @@ def installer_contract_files():
         "contracts/update-path-policy.schema.json": "{}\n",
         "contracts/product-state.schema.json": "{}\n",
         "contracts/update-plan.schema.json": "{}\n",
+        "contracts/update-approval.schema.json": "{}\n",
+        "contracts/update-transaction-receipt.schema.json": "{}\n",
         "extract-vault.py": "print('extract')\n",
         "install.bat": "@echo off\n",
         "revoked-activation-ids.txt": "# none\n",

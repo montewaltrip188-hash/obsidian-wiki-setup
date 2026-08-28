@@ -3,7 +3,7 @@
   "$id": "https://junyong.ai/contracts/update-plan.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["plan_id", "command", "status", "vault_id", "bundle_candidate_id", "bundle_version", "excluded_roots", "scanned_paths", "changes"],
+  "required": ["plan_id", "command", "status", "vault_id", "bundle_candidate_id", "bundle_version", "path_policy_sha256", "product_state_sha256", "excluded_roots", "scanned_paths", "changes"],
   "properties": {
     "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "command": {"const": "plan"},
@@ -11,6 +11,8 @@
     "vault_id": {"type": "string"},
     "bundle_candidate_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "bundle_version": {"type": "string"},
+    "path_policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "product_state_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "excluded_roots": {"type": "array", "items": {"type": "string"}},
     "scanned_paths": {"type": "array", "items": {"type": "string"}},
     "changes": {
@@ -18,7 +20,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "ownership", "decision", "requires_approval", "base_sha256", "local_sha256", "target_sha256"],
+        "required": ["path", "ownership", "decision", "requires_approval", "base_sha256", "local_sha256", "target_sha256", "change_sha256"],
         "properties": {
           "path": {"type": "string"},
           "ownership": {"enum": ["product_merge", "product_replace"]},
@@ -27,6 +29,7 @@
           "base_sha256": {"type": ["string", "null"]},
           "local_sha256": {"type": ["string", "null"]},
           "target_sha256": {"type": ["string", "null"]},
+          "change_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "target_diff": {"type": ["string", "null"]}
         }
       }

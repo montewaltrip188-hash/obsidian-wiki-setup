@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/update-approval.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["approval_format", "plan_id", "subject", "approved_at", "allow_deletes", "approved_changes"],
+  "properties": {
+    "approval_format": {"const": 1},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subject": {"type": "string", "minLength": 1},
+    "approved_at": {"type": "string", "minLength": 1},
+    "allow_deletes": {"type": "boolean"},
+    "approved_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "change_sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "change_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

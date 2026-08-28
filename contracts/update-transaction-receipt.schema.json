@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/update-transaction-receipt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["receipt_format", "receipt_sha256", "operation", "status", "transaction_id", "vault_id"],
+  "oneOf": [
+    {
+      "properties": {"operation": {"const": "apply"}},
+      "required": ["plan_id", "before", "after", "state_before_sha256", "state_after_sha256"]
+    },
+    {
+      "properties": {"operation": {"const": "rollback"}},
+      "required": ["source_transaction_id", "restored", "state_restored_sha256"]
+    }
+  ],
+  "properties": {
+    "receipt_format": {"const": 1},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "operation": {"enum": ["apply", "rollback"]},
+    "status": {"const": "completed"},
+    "transaction_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "vault_id": {"type": "string", "minLength": 1},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_transaction_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "before": {"$ref": "#/$defs/digestMap"},
+    "after": {"$ref": "#/$defs/digestMap"},
+    "restored": {"$ref": "#/$defs/digestMap"},
+    "state_before_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state_after_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state_restored_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "digestMap": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "null"},
+          {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        ]
+      }
+    }
+  }
+}
