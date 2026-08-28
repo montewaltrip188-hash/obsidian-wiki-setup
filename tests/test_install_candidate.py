@@ -55,16 +55,62 @@ def installer_contract_files():
         "contracts/install-candidate.schema.json": "{}\n",
         "contracts/deploy-manifest.schema.json": "{}\n",
         "contracts/wiki-skill-lifecycle.json": "{}\n",
+        "contracts/runtime-contract.schema.json": "{}\n",
+        "contracts/compatibility.schema.json": "{}\n",
+        "contracts/bundle-manifest.schema.json": "{}\n",
+        "contracts/bundle-release.schema.json": "{}\n",
+        "contracts/update-path-policy.schema.json": "{}\n",
+        "contracts/product-state.schema.json": "{}\n",
+        "contracts/update-plan.schema.json": "{}\n",
         "extract-vault.py": "print('extract')\n",
         "install.bat": "@echo off\n",
         "revoked-activation-ids.txt": "# none\n",
         "scripts/manage-wiki-skills.ps1": "Write-Output 'manage'\n",
         "scripts/manage-wiki-skills.sh": "#!/bin/sh\necho manage\n",
+        "scripts/vault-update.ps1": "Write-Output 'vault update'\n",
+        "scripts/vault-update.sh": "#!/bin/sh\necho vault update\n",
         "scripts/install-candidate.ps1": "Write-Output 'maintainer wrapper'\n",
         "setup-mac.sh": "#!/bin/sh\necho install\n",
         "setup-win.ps1": "Write-Output 'install'\n",
         "tests/not-customer-payload.txt": "maintenance only\n",
         "tools/manage_wiki_skills.py": "print('manage')\n",
+        "tools/vault_update.py": "print('vault update')\n",
+        "release/bundle-release.json": json.dumps(
+            {
+                "manifest_format": 1,
+                "release_state": "unreleased_candidate",
+                "bundle_version": None,
+                "product_schema_version": "1.0.0",
+                "wiki_skills_version": "2.0.1",
+                "repositories": {
+                    "product": "example/product",
+                    "wiki_skills": "example/skills",
+                    "installer": "example/installer",
+                },
+            }
+        ) + "\n",
+    }
+
+
+def product_contract_files():
+    return {
+        "AGENTS.md": "agents\n",
+        "CLAUDE.md": "product\n",
+        "schema/daily-review-rules.md": "daily\n",
+        "schema/domain-rules.md": "domain\n",
+        "schema/lint-rules.md": "lint\n",
+        "schema/runtime-contract.json": json.dumps({"schema_version": "1.0.0"}) + "\n",
+        "schema/templates.md": "templates\n",
+        "schema/update-policy.json": "{}\n",
+    }
+
+
+def skill_contract_files():
+    return {
+        "core/design-juan-wiki/SKILL.md": "design\n",
+        "core/wiki-hybrid-search/SKILL.md": "query\n",
+        "core/ocr-and-documents/SKILL.md": "ocr\n",
+        "COMPATIBILITY.json": json.dumps({"runtime_version": "2.0.1"}) + "\n",
     }
 
 
@@ -183,7 +229,11 @@ class InstallCandidateCliTests(unittest.TestCase):
                     "schema/daily-review-rules.md": "daily\n",
                     "schema/domain-rules.md": "domain\n",
                     "schema/lint-rules.md": "lint\n",
+                    "schema/runtime-contract.json": json.dumps(
+                        {"schema_version": "1.0.0"}
+                    ) + "\n",
                     "schema/templates.md": "templates\n",
+                    "schema/update-policy.json": "{}\n",
                 },
             )
             skill, skill_commit, _ = make_repo(
@@ -193,6 +243,9 @@ class InstallCandidateCliTests(unittest.TestCase):
                     "core/design-juan-wiki/SKILL.md": "design\n",
                     "core/wiki-hybrid-search/SKILL.md": "query\n",
                     "core/ocr-and-documents/SKILL.md": "ocr\n",
+                    "COMPATIBILITY.json": json.dumps(
+                        {"runtime_version": "2.0.1"}
+                    ) + "\n",
                     "references/shared.md": "shared\n",
                 },
             )
@@ -299,12 +352,32 @@ class InstallCandidateCliTests(unittest.TestCase):
                 "revoked-activation-ids.txt",
                 "extract-vault.py",
                 "tools/manage_wiki_skills.py",
+                "tools/vault_update.py",
                 "scripts/manage-wiki-skills.ps1",
                 "scripts/manage-wiki-skills.sh",
+                "scripts/vault-update.ps1",
+                "scripts/vault-update.sh",
                 "contracts/deploy-manifest.schema.json",
+                "contracts/product-state.schema.json",
+                "bundle-manifest.json",
                 "skills/claudecode-wiki-skills/core/design-juan-wiki/SKILL.md",
             ):
                 self.assertTrue((extracted / required).is_file(), required)
+            bundle_manifest = json.loads(
+                (extracted / "bundle-manifest.json").read_text(encoding="utf-8")
+            )
+            manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["candidate_id"], bundle_manifest["candidate_id"])
+            self.assertEqual(
+                manifest["sources"]["product"]["commit"],
+                bundle_manifest["components"]["product"]["commit"],
+            )
+            self.assertEqual(
+                manifest["sources"]["skill"]["commit"],
+                bundle_manifest["components"]["wiki_skills"]["commit"],
+            )
+            self.assertEqual("unreleased_candidate", bundle_manifest["release_state"])
+            self.assertIsNone(bundle_manifest["bundle_version"])
             self.assertFalse(any(name.startswith("payload/") for name in names))
             self.assertFalse(any(name.startswith("vault/") for name in names))
 
@@ -325,7 +398,6 @@ class InstallCandidateCliTests(unittest.TestCase):
             self.assertNotIn("setup-win.ps1", mac_names)
             self.assertNotIn("install.bat", mac_names)
             self.assertNotIn("change-model.ps1", mac_names)
-            manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
             self.assertRegex(manifest["candidate_id"], r"^[0-9a-f]{64}$")
             self.assertEqual(manifest["default_skills"], [
                 "design-juan-wiki",
@@ -341,23 +413,12 @@ class InstallCandidateCliTests(unittest.TestCase):
             product, product_commit, _ = make_repo(
                 root,
                 "product",
-                {
-                    "AGENTS.md": "agents\n",
-                    "CLAUDE.md": "product\n",
-                    "schema/daily-review-rules.md": "daily\n",
-                    "schema/domain-rules.md": "domain\n",
-                    "schema/lint-rules.md": "lint\n",
-                    "schema/templates.md": "templates\n",
-                },
+                product_contract_files(),
             )
             skill, skill_commit, _ = make_repo(
                 root,
                 "skill",
-                {
-                    "core/design-juan-wiki/SKILL.md": "design\n",
-                    "core/wiki-hybrid-search/SKILL.md": "query\n",
-                    "core/ocr-and-documents/SKILL.md": "ocr\n",
-                },
+                skill_contract_files(),
             )
             installer, installer_commit, _ = make_repo(
                 root,
@@ -433,19 +494,8 @@ class InstallCandidateCliTests(unittest.TestCase):
         for case, (source_name, bad_path, bad_content) in bad_files.items():
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
-                product_files = {
-                    "AGENTS.md": "agents\n",
-                    "CLAUDE.md": "product\n",
-                    "schema/daily-review-rules.md": "daily\n",
-                    "schema/domain-rules.md": "domain\n",
-                    "schema/lint-rules.md": "lint\n",
-                    "schema/templates.md": "templates\n",
-                }
-                skill_files = {
-                    "core/design-juan-wiki/SKILL.md": "design\n",
-                    "core/wiki-hybrid-search/SKILL.md": "query\n",
-                    "core/ocr-and-documents/SKILL.md": "ocr\n",
-                }
+                product_files = product_contract_files()
+                skill_files = skill_contract_files()
                 installer_files = installer_contract_files()
                 {"product": product_files, "skill": skill_files, "installer": installer_files}[
                     source_name
@@ -474,23 +524,12 @@ class InstallCandidateCliTests(unittest.TestCase):
             product, product_commit, _ = make_repo(
                 root,
                 "product",
-                {
-                    "AGENTS.md": "agents\n",
-                    "CLAUDE.md": "product\n",
-                    "schema/daily-review-rules.md": "daily\n",
-                    "schema/domain-rules.md": "domain\n",
-                    "schema/lint-rules.md": "lint\n",
-                    "schema/templates.md": "templates\n",
-                },
+                product_contract_files(),
             )
             skill, skill_commit, _ = make_repo(
                 root,
                 "skill",
-                {
-                    "core/design-juan-wiki/SKILL.md": "design\n",
-                    "core/wiki-hybrid-search/SKILL.md": "query\n",
-                    "core/ocr-and-documents/SKILL.md": "ocr\n",
-                },
+                skill_contract_files(),
             )
             installer, _, _ = make_repo(
                 root,
@@ -529,23 +568,12 @@ class InstallCandidateCliTests(unittest.TestCase):
             product, product_commit, _ = make_repo(
                 root,
                 "product",
-                {
-                    "AGENTS.md": "agents\n",
-                    "CLAUDE.md": "product\n",
-                    "schema/daily-review-rules.md": "daily\n",
-                    "schema/domain-rules.md": "domain\n",
-                    "schema/lint-rules.md": "lint\n",
-                    "schema/templates.md": "templates\n",
-                },
+                product_contract_files(),
             )
             skill, skill_commit, _ = make_repo(
                 root,
                 "skill",
-                {
-                    "core/design-juan-wiki/SKILL.md": "design\n",
-                    "core/wiki-hybrid-search/SKILL.md": "query\n",
-                    "core/ocr-and-documents/SKILL.md": "ocr\n",
-                },
+                skill_contract_files(),
             )
             installer, installer_commit, _ = make_repo(
                 root,

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/product-state.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "vault_id", "product", "bundle", "skills", "managed_inventory_sha256", "applied_migrations", "last_transaction"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "vault_id": {"type": "string", "minLength": 1},
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "base_commit", "base_tree", "baseline_sha256"],
+      "properties": {
+        "repository": {"type": "string"},
+        "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "base_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "baseline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "candidate_id"],
+      "properties": {
+        "version": {"type": "string"},
+        "candidate_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "commit"],
+      "properties": {
+        "version": {"type": "string"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "managed_inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "applied_migrations": {"type": "array", "items": {"type": "string"}},
+    "last_transaction": {"type": ["string", "null"]}
+  }
+}

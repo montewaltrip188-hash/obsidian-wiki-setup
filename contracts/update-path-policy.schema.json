@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/update-path-policy.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policy_format", "product_id", "default", "excluded_roots", "rules"],
+  "properties": {
+    "policy_format": {"const": 1},
+    "product_id": {"type": "string", "minLength": 1},
+    "default": {"$ref": "#/$defs/decision"},
+    "excluded_roots": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "rules": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {"$ref": "#/$defs/decision"},
+          {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": {"type": "string"},
+              "paths": {"type": "array", "items": {"type": "string"}},
+              "prefixes": {"type": "array", "items": {"type": "string"}},
+              "globs": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "decision": {
+      "type": "object",
+      "required": ["ownership", "action"],
+      "properties": {
+        "ownership": {"enum": ["unmanaged", "customer_business", "customer_config", "derived_rebuildable", "local_private", "seed_once", "migration_only", "product_merge", "product_replace"]},
+        "action": {"enum": ["preserve", "exclude", "rebuild_by_fingerprint", "migration_only", "three_way"]}
+      }
+    }
+  }
+}

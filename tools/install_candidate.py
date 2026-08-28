@@ -28,12 +28,15 @@ REQUIRED_PATHS = {
         "schema/daily-review-rules.md",
         "schema/domain-rules.md",
         "schema/lint-rules.md",
+        "schema/runtime-contract.json",
         "schema/templates.md",
+        "schema/update-policy.json",
     },
     "skill": {
         "core/design-juan-wiki/SKILL.md",
         "core/wiki-hybrid-search/SKILL.md",
         "core/ocr-and-documents/SKILL.md",
+        "COMPATIBILITY.json",
     },
     "installer": {"scripts/install-candidate.ps1"},
 }
@@ -42,12 +45,23 @@ INSTALLER_COMMON_REQUIRED = {
     "contracts/deploy-manifest.schema.json",
     "contracts/install-candidate.schema.json",
     "contracts/wiki-skill-lifecycle.json",
+    "contracts/runtime-contract.schema.json",
+    "contracts/compatibility.schema.json",
+    "contracts/bundle-manifest.schema.json",
+    "contracts/bundle-release.schema.json",
+    "contracts/update-path-policy.schema.json",
+    "contracts/product-state.schema.json",
+    "contracts/update-plan.schema.json",
     "extract-vault.py",
     "revoked-activation-ids.txt",
     "scripts/install-candidate.ps1",
     "scripts/manage-wiki-skills.ps1",
     "scripts/manage-wiki-skills.sh",
+    "scripts/vault-update.ps1",
+    "scripts/vault-update.sh",
     "tools/manage_wiki_skills.py",
+    "tools/vault_update.py",
+    "release/bundle-release.json",
 }
 INSTALLER_PLATFORM_REQUIRED = {
     "windows": {
@@ -64,7 +78,11 @@ INSTALLER_COMMON_PAYLOAD = {
     "revoked-activation-ids.txt",
     "scripts/manage-wiki-skills.ps1",
     "scripts/manage-wiki-skills.sh",
+    "scripts/vault-update.ps1",
+    "scripts/vault-update.sh",
     "tools/manage_wiki_skills.py",
+    "tools/vault_update.py",
+    "release/bundle-release.json",
 }
 INSTALLER_PLATFORM_PAYLOAD = {
     "windows": {
@@ -303,6 +321,11 @@ def make_customer_zip(staging: Path, records) -> bytes:
     entries = [
         ("manifest.json", (staging / "manifest.json").read_bytes(), "100644"),
         (
+            "bundle-manifest.json",
+            (staging / "bundle-manifest.json").read_bytes(),
+            "100644",
+        ),
+        (
             "deploy-manifest.json",
             (staging / "deploy-manifest.json").read_bytes(),
             "100644",
@@ -329,6 +352,103 @@ def make_customer_zip(staging: Path, records) -> bytes:
         )
     entries.extend(sorted(customer_files, key=lambda item: item[0]))
     return make_zip_bytes(entries)
+
+
+def json_contract(content: bytes, label: str) -> dict:
+    try:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CandidateError(f"{label} 不是有效 JSON") from exc
+    if not isinstance(value, dict):
+        raise CandidateError(f"{label} 必须是 JSON 对象")
+    return value
+
+
+def build_bundle_manifest(candidate_id: str, sources: dict, content_by_source: dict) -> dict:
+    try:
+        product_contract = json_contract(
+            content_by_source[("product", "schema/runtime-contract.json")],
+            "产品运行时合同",
+        )
+        skill_compatibility = json_contract(
+            content_by_source[("skill", "COMPATIBILITY.json")],
+            "Skill 兼容合同",
+        )
+        release = json_contract(
+            content_by_source[("installer", "release/bundle-release.json")],
+            "bundle 发布合同",
+        )
+        repositories = release["repositories"]
+    except KeyError as exc:
+        raise CandidateError("三层版本合同缺少必需字段") from exc
+    if (
+        release.get("manifest_format") != 1
+        or release.get("release_state") not in {"unreleased_candidate", "stable"}
+        or set(repositories) != {"product", "wiki_skills", "installer"}
+        or product_contract.get("schema_version")
+        != release.get("product_schema_version")
+        or skill_compatibility.get("runtime_version")
+        != release.get("wiki_skills_version")
+    ):
+        raise CandidateError("三层版本合同不闭合")
+    runtime = product_contract.get("runtime")
+    if isinstance(runtime, dict):
+        tested = runtime.get("tested")
+        supports = skill_compatibility.get("supports")
+        supported_product = any(
+            isinstance(item, dict)
+            and item.get("product_id") == product_contract.get("product_id")
+            for item in supports or []
+        )
+        if (
+            runtime.get("id") != skill_compatibility.get("runtime_id")
+            or not isinstance(tested, dict)
+            or tested.get("version") != skill_compatibility.get("runtime_version")
+            or tested.get("commit") != sources["skill"]["commit"]
+            or not supported_product
+        ):
+            raise CandidateError("三层版本合同与冻结 Skill 来源不一致")
+    if release["release_state"] == "stable" and not release.get("bundle_version"):
+        raise CandidateError("stable bundle 必须分配版本")
+    if (
+        release["release_state"] == "stable"
+        and skill_compatibility.get("release_state") not in {None, "stable"}
+    ):
+        raise CandidateError("stable bundle 不能绑定未发布的 Skill 候选")
+    compatibility_receipt = hashlib.sha256(
+        canonical_json(
+            {
+                "product_contract": product_contract,
+                "skill_compatibility": skill_compatibility,
+            }
+        )
+    ).hexdigest()
+    return {
+        "bundle_version": release.get("bundle_version"),
+        "candidate_id": candidate_id,
+        "compatibility_receipt_sha256": compatibility_receipt,
+        "components": {
+            "installer": {
+                "commit": sources["installer"]["commit"],
+                "repository": repositories["installer"],
+                "tree": sources["installer"]["tree"],
+            },
+            "product": {
+                "commit": sources["product"]["commit"],
+                "repository": repositories["product"],
+                "schema_version": release["product_schema_version"],
+                "tree": sources["product"]["tree"],
+            },
+            "wiki_skills": {
+                "commit": sources["skill"]["commit"],
+                "repository": repositories["wiki_skills"],
+                "tree": sources["skill"]["tree"],
+                "version": release["wiki_skills_version"],
+            },
+        },
+        "manifest_format": 1,
+        "release_state": release["release_state"],
+    }
 
 
 def load_plan(path: Path):
@@ -398,6 +518,13 @@ def command_build(args):
     }
     manifest = dict(identity)
     manifest["candidate_id"] = hashlib.sha256(canonical_json(identity)).hexdigest()
+    content_by_source = {
+        (source_name, source_path): content
+        for source_name, source_path, _, _, content in collected
+    }
+    bundle_manifest = build_bundle_manifest(
+        manifest["candidate_id"], sources, content_by_source
+    )
 
     staging.mkdir(parents=True)
     for _, _, destination, mode, content in collected:
@@ -407,6 +534,7 @@ def command_build(args):
         if mode == "100755":
             target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     write_json(staging / "manifest.json", manifest)
+    write_json(staging / "bundle-manifest.json", bundle_manifest)
     product_files = [
         (source_path, mode, content)
         for source_name, source_path, _, mode, content in collected
@@ -541,6 +669,22 @@ def command_verify(args):
         raise CandidateError("deploy-manifest.json 与产品 Git 对象不一致")
     if deploy_bytes != pretty_json_bytes(expected_deploy):
         raise CandidateError("deploy-manifest.json 不是规范化 JSON")
+    content_by_source = {
+        (record["source"], record["source_path"]):
+        (staging / Path(record["path"])).read_bytes()
+        for record in records
+    }
+    expected_bundle = build_bundle_manifest(candidate_id, sources, content_by_source)
+    bundle_path = staging / "bundle-manifest.json"
+    try:
+        bundle_bytes = bundle_path.read_bytes()
+        actual_bundle = json.loads(bundle_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CandidateError(f"bundle-manifest.json 无法读取：{exc}") from exc
+    if actual_bundle != expected_bundle:
+        raise CandidateError("bundle-manifest.json 与三仓来源不一致")
+    if bundle_bytes != pretty_json_bytes(expected_bundle):
+        raise CandidateError("bundle-manifest.json 不是规范化 JSON")
     expected_archive = make_customer_zip(staging, records)
     try:
         actual_archive = archive_path.read_bytes()

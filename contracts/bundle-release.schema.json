@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/bundle-release.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_format", "release_state", "bundle_version", "product_schema_version", "wiki_skills_version", "repositories"],
+  "properties": {
+    "manifest_format": {"const": 1},
+    "release_state": {"enum": ["unreleased_candidate", "stable"]},
+    "bundle_version": {"type": ["string", "null"]},
+    "product_schema_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "wiki_skills_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "wiki_skills", "installer"],
+      "properties": {
+        "product": {"type": "string", "minLength": 1},
+        "wiki_skills": {"type": "string", "minLength": 1},
+        "installer": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

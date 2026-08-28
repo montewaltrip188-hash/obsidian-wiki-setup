@@ -1,0 +1,12 @@
+{
+  "manifest_format": 1,
+  "release_state": "unreleased_candidate",
+  "bundle_version": null,
+  "product_schema_version": "1.0.0",
+  "wiki_skills_version": "2.1.0",
+  "repositories": {
+    "product": "montewaltrip188-hash/obsidian-llm-wiki-template",
+    "wiki_skills": "montewaltrip188-hash/claudecode-wiki-skills",
+    "installer": "jiegeng333/obsidian-wiki-setup"
+  }
+}

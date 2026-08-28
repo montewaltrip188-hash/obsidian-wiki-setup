@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/compatibility.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_format", "runtime_id", "runtime_version", "supports"],
+  "properties": {
+    "contract_format": {"const": 1},
+    "runtime_id": {"const": "claudecode-wiki-skills"},
+    "runtime_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "release_state": {"enum": ["unreleased_candidate", "stable"]},
+    "release_tag": {"type": "string"},
+    "release_tag_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "supports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["product_id", "schema_range"],
+        "properties": {
+          "product_id": {"type": "string", "minLength": 1},
+          "schema_range": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/bundle-manifest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_format", "release_state", "bundle_version", "candidate_id", "components", "compatibility_receipt_sha256"],
+  "properties": {
+    "manifest_format": {"const": 1},
+    "release_state": {"enum": ["unreleased_candidate", "stable"]},
+    "bundle_version": {"type": ["string", "null"]},
+    "candidate_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "wiki_skills", "installer"],
+      "properties": {
+        "product": {"$ref": "#/$defs/repositoryComponent"},
+        "wiki_skills": {"$ref": "#/$defs/repositoryComponent"},
+        "installer": {"$ref": "#/$defs/repositoryComponent"}
+      }
+    },
+    "compatibility_receipt_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "repositoryComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "tree"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "version": {"type": "string"},
+        "schema_version": {"type": "string"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    }
+  }
+}

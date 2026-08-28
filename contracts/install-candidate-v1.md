@@ -39,11 +39,18 @@ candidate.zip
 ├── tools/manage_wiki_skills.py
 ├── scripts/manage-wiki-skills.ps1
 ├── scripts/manage-wiki-skills.sh
+├── scripts/vault-update.ps1
+├── scripts/vault-update.sh
 ├── contracts/
+├── bundle-manifest.json
+├── release/bundle-release.json
+├── tools/vault_update.py
 └── skills/claudecode-wiki-skills/
 ```
 
 `payload/**` 只作为本地构建证据参与清单与 `verify`，不进入客户 ZIP。客户 ZIP 中的 Vault 只出现一次，即根目录的 `vault.zip`。
+
+客户候选同时携带 U1 只读升级检查器及其合同 Schema，但不携带 `apply` 命令。产品版本合同和路径策略来自 `vault.zip` 内的产品树；Skill 兼容合同来自冻结的 Skill 树；安装器仓库只保存非自引用的 `release/bundle-release.json`，Builder 再以三仓精确 commit/tree 和最终 candidate ID 生成根目录 `bundle-manifest.json`。三者缺一或不闭合时，只读检查必须停止。
 
 `vault.zip` 是构建产物而不是仓库资产，只包含唯一顶层 `vault/`。`deploy-manifest.json` 是安装安全层的窄接口：
 

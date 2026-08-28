@@ -10,6 +10,8 @@
 
 当前 D0 验收基线为产品提交 `4ea70aaf2fd8a13e5eb455263d5214f8dc5bb6eb`，以及 Wiki Skill `v2.0.1` 发布后提交 `b83e321457211c65eb26200ddcb97f45af66c160`。
 
+当前 U1-R 本地候选使用产品 Schema `1.0.0` 和 Wiki Skill `2.1.0`；bundle 仍未分配版本，未 tag、push 或发布。
+
 ## 默认交付内容
 
 - 产品仓库精确 commit 对应的 Obsidian Vault；
@@ -67,6 +69,28 @@ Vault 部署流程固定为：
 已有 Vault 默认拒绝覆盖。只有用户显式同意时才先生成同级备份；成功后备份仍保留，清理必须使用绑定回执的独立命令。
 
 产品仓库提交对应的文件树始终是 Vault 模板的唯一交付源。安装入口写入 `.obsidian/plugins/claudian/data.json` 属于部署完成后的受控运行时配置，不会反向成为模板来源：部署器只允许这一条白名单路径变化，并在确认其他文件仍与产品树一致后更新绑定回执；验收失败会保留升级备份并停止。
+
+## U1：已有 Vault 的只读升级检查
+
+已有 Vault 不再以“下载新仓库后整体搬家”为升级模型。U1 随客户候选交付三层版本合同、路径所有权策略和严格只读的 `status / check / plan`：
+
+```powershell
+./scripts/vault-update.ps1 status --vault <客户Vault>
+./scripts/vault-update.ps1 check --vault <客户Vault> `
+  --product-contract <runtime-contract.json> `
+  --skill-compatibility <COMPATIBILITY.json> `
+  --bundle-manifest <bundle-manifest.json>
+./scripts/vault-update.ps1 plan --vault <客户Vault> `
+  --base-root <已安装基线> --target-root <目标产品树> `
+  --path-policy <update-policy.json> `
+  --product-contract <runtime-contract.json> `
+  --skill-compatibility <COMPATIBILITY.json> `
+  --bundle-manifest <bundle-manifest.json>
+```
+
+`plan` 只读取产品管理路径，输出三方差异、逐文件哈希、审批标记和稳定 `plan_id`；客户知识、日志、输出、索引、密钥和本地状态均不扫描、不修改。旧客户缺少 `.juanyong-ai/product-state.json` 时只返回 `legacy_adoption_required`，不会自动写入状态或擅自纳管。
+
+当前仓库内的 `release/bundle-release.json` 故意保持 `unreleased_candidate` 且不分配版本。Builder 会把它与三仓精确来源合成为客户候选根目录的 `bundle-manifest.json`，避免让仓库内文件自引用尚未产生的 commit 或 candidate ID。版本获批并把发布合同切换为 `stable` 前，`check` 和 `plan` 会以 `BUNDLE_VERSION_UNASSIGNED` 停止。U1 没有 `apply` 命令。完整合同见 `contracts/read-only-vault-update-v1.md`。
 
 ## Skill 安装位置
 
