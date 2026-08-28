@@ -121,7 +121,7 @@ U3 用 `scripts/joint-update.ps1`（Windows）或 `scripts/joint-update.sh`（ma
 
 ## D3：真机、证明与发布签名
 
-D3 使用 `release/d3_candidate.py preflight / run` 绑定 D2 `plan_id`、候选 SHA-256、真实 CPU 架构、离线 Query、事务安装、验证和撤销回执。`.github/workflows/d3-macos-candidate.yml` 在 Intel 与 Apple Silicon GitHub 托管真机上运行，并为两份验收回执生成 GitHub artifact attestation。三平台回执齐全后，`release/d3_release.py prepare` 组装两平台候选、SBOM、D2 计划和回执，并绑定预先确认的生产公钥指纹；维护者再用仓库外至少 3072 位 RSA 私钥签署规范化 manifest，最后由 `d3_release.py verify` 验证签名、公钥指纹、文件集合、长度、摘要和全部证据的交叉绑定。完整合同见 `contracts/d3-release-candidate-v1.md`。
+D3 使用 `release/d3_candidate.py preflight / run` 绑定 D2 `plan_id`、候选 SHA-256、真实 CPU 架构、离线 Query、事务安装、验证和撤销回执。`.github/workflows/d3-macos-candidate.yml` 在 Intel 与 Apple Silicon GitHub 托管真机上运行，并为两份验收回执生成 GitHub artifact attestation。三平台回执齐全后，`release/d3_release.py prepare` 组装两平台候选、SBOM、D2 计划和回执，并绑定仓库固定的生产公钥指纹；维护者再用仓库外加密 PKCS#8 RSA-3072 私钥签署规范化 manifest，私钥口令只以当前 Windows 用户 DPAPI 密文保存。最后由 `d3_release.py verify` 使用仓库公钥验证签名、公钥指纹、文件集合、长度、摘要和全部证据的交叉绑定。完整合同见 `contracts/d3-release-candidate-v1.md`。
 
 ## Skill 安装位置
 

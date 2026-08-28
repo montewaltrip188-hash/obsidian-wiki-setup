@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "algorithm": "RSA-SHA256-PKCS1-v1_5",
+  "minimum_rsa_bits": 3072,
+  "key_id": "c1f596094a9a54ada888502a2ab7ef6bc5fecf82d4281dd4bbae2ae7bc9d9938",
+  "public_key": "release/release-signing-public-key.pem",
+  "private_key_storage": "encrypted-pkcs8-dpapi-current-user"
+}

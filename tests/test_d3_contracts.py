@@ -27,6 +27,11 @@ class D3ContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        signing_policy = json.loads(
+            (ROOT / "contracts" / "release-signing-policy.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertIn("receipt_sha256", receipt["required"])
         self.assertEqual(
             "d3-candidate-acceptance",
@@ -41,6 +46,10 @@ class D3ContractTests(unittest.TestCase):
             "key_id",
             manifest["properties"]["required_signature"]["required"],
         )
+        self.assertEqual(
+            "encrypted-pkcs8-dpapi-current-user",
+            signing_policy["properties"]["private_key_storage"]["const"],
+        )
 
     def test_d3_documentation_keeps_external_execution_and_publish_boundaries_explicit(self):
         contract = (ROOT / "contracts" / "d3-release-candidate-v1.md").read_text(
@@ -54,10 +63,18 @@ class D3ContractTests(unittest.TestCase):
             "release/d3_candidate.py",
             "release/d3_release.py",
             "不 tag、push、创建 Release 或切换 stable",
-            "生产签名私钥不得进入仓库",
+            "生产签名私钥和 DPAPI 密文不得进入仓库",
             "生产公钥指纹",
+            "DPAPI",
         ):
             self.assertIn(text, contract)
+        release = json.loads(
+            (ROOT / "release" / "bundle-release.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            "montewaltrip188-hash/obsidian-wiki-setup",
+            release["repositories"]["installer"],
+        )
         self.assertIn("bundle `2.1.0`", readme)
         self.assertIn("run_approval_required", readme)
         self.assertIn("D3", readme)

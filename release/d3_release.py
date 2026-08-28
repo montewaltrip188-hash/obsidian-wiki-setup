@@ -38,6 +38,8 @@ EXPECTED_DEPENDENCIES = {
     "requests": "2.34.2",
 }
 SIGNATURE_ALGORITHM = "RSA-SHA256-PKCS1-v1_5"
+INSTALLER_REPOSITORY = "montewaltrip188-hash/obsidian-wiki-setup"
+SIGNING_POLICY_PATH = Path(__file__).with_name("release-signing-policy.json")
 
 
 def safe_relative(path: str) -> Path:
@@ -47,6 +49,41 @@ def safe_relative(path: str) -> Path:
     if pure.is_absolute() or ".." in pure.parts:
         raise D3Error("D3_RELEASE_PATH_INVALID")
     return Path(*pure.parts)
+
+
+def load_signing_policy() -> dict:
+    policy = load_json(SIGNING_POLICY_PATH, "D3_RELEASE_SIGNING_POLICY_INVALID")
+    if (
+        set(policy)
+        != {
+            "algorithm",
+            "key_id",
+            "minimum_rsa_bits",
+            "private_key_storage",
+            "public_key",
+            "schema_version",
+        }
+        or policy.get("schema_version") != 1
+        or policy.get("algorithm") != SIGNATURE_ALGORITHM
+        or policy.get("minimum_rsa_bits") != 3072
+        or policy.get("private_key_storage")
+        != "encrypted-pkcs8-dpapi-current-user"
+        or not HEX64.fullmatch(str(policy.get("key_id", "")))
+        or policy.get("public_key") != "release/release-signing-public-key.pem"
+    ):
+        raise D3Error("D3_RELEASE_SIGNING_POLICY_INVALID")
+    repository = Path(__file__).resolve().parent.parent
+    public_key_entry = repository / safe_relative(policy["public_key"])
+    if public_key_entry.is_symlink():
+        raise D3Error("D3_RELEASE_SIGNING_POLICY_INVALID")
+    public_key = public_key_entry.resolve(strict=True)
+    try:
+        public_key.relative_to(repository)
+    except ValueError as exc:
+        raise D3Error("D3_RELEASE_SIGNING_POLICY_INVALID") from exc
+    if not public_key.is_file():
+        raise D3Error("D3_RELEASE_SIGNING_POLICY_INVALID")
+    return {**policy, "public_key_path": public_key}
 
 
 def pretty_json(value: object) -> bytes:
@@ -119,11 +156,11 @@ def load_receipt(path: Path, target: str, plan: dict) -> dict:
         installer_commit = plan.get("sources", {}).get("installer", {}).get("commit")
         if (
             not isinstance(runner, dict)
-            or runner.get("github_repository") != "jiegeng333/obsidian-wiki-setup"
+            or runner.get("github_repository") != INSTALLER_REPOSITORY
             or runner.get("github_sha") != installer_commit
             or not str(runner.get("github_run_id", "")).isdigit()
             or not str(runner.get("github_workflow_ref", "")).startswith(
-                "jiegeng333/obsidian-wiki-setup/.github/workflows/d3-macos-candidate.yml@"
+                f"{INSTALLER_REPOSITORY}/.github/workflows/d3-macos-candidate.yml@"
             )
         ):
             raise D3Error("D3_MACOS_PROVENANCE_MISSING")
@@ -140,11 +177,11 @@ def verify_attestation(receipt_path: Path, bundle_path: Path, plan: dict) -> dic
         "verify",
         receipt,
         "--repo",
-        "jiegeng333/obsidian-wiki-setup",
+        INSTALLER_REPOSITORY,
         "--bundle",
         bundle,
         "--signer-workflow",
-        "jiegeng333/obsidian-wiki-setup/.github/workflows/d3-macos-candidate.yml",
+        f"{INSTALLER_REPOSITORY}/.github/workflows/d3-macos-candidate.yml",
         "--source-digest",
         installer_commit,
         "--signer-digest",
@@ -207,8 +244,6 @@ def copy_sbom(candidate: Path, output: Path, destination: str) -> None:
 
 
 def prepare(args: argparse.Namespace) -> dict:
-    if not HEX64.fullmatch(str(args.expected_key_id)):
-        raise D3Error("D3_RELEASE_SIGNING_KEY_ID_INVALID")
     plan_path = args.release_plan.resolve(strict=True)
     plan = load_json(plan_path, "D2_PLAN_INVALID")
     validate_release_plan(plan)
@@ -225,6 +260,7 @@ def prepare(args: argparse.Namespace) -> dict:
             args.macos_arm64_receipt, args.macos_arm64_attestation, plan
         ),
     }
+    signing_policy = load_signing_policy()
     output = args.output.resolve()
     if output.exists():
         raise D3Error("D3_RELEASE_OUTPUT_EXISTS")
@@ -304,7 +340,7 @@ def prepare(args: argparse.Namespace) -> dict:
             "required_signature": {
                 "algorithm": SIGNATURE_ALGORITHM,
                 "file": "release-manifest.sig",
-                "key_id": args.expected_key_id,
+                "key_id": signing_policy["key_id"],
             },
             "sources": plan["sources"],
         }
@@ -356,6 +392,7 @@ def verify_signature(release_dir: Path, public_key: Path) -> dict:
 
 
 def verify(args: argparse.Namespace) -> dict:
+    signing_policy = load_signing_policy()
     release_dir = args.release_dir.resolve(strict=True)
     manifest_path = release_dir / "release-manifest.json"
     manifest_bytes = manifest_path.read_bytes()
@@ -372,6 +409,7 @@ def verify(args: argparse.Namespace) -> dict:
         or manifest["required_signature"].get("file") != "release-manifest.sig"
         or set(manifest["required_signature"]) != {"algorithm", "file", "key_id"}
         or not HEX64.fullmatch(str(manifest["required_signature"].get("key_id", "")))
+        or manifest["required_signature"].get("key_id") != signing_policy["key_id"]
         or not isinstance(manifest.get("files"), list)
     ):
         raise D3Error("D3_RELEASE_MANIFEST_INVALID")
@@ -492,7 +530,7 @@ def verify(args: argparse.Namespace) -> dict:
             or file_sha256(asset) != candidate["candidate_zip_sha256"]
         ):
             raise D3Error("D3_RELEASE_CANDIDATE_MISMATCH")
-    signature = verify_signature(release_dir, args.public_key.resolve(strict=True))
+    signature = verify_signature(release_dir, signing_policy["public_key_path"])
     if signature.get("key_id") != manifest["required_signature"]["key_id"]:
         raise D3Error("D3_RELEASE_SIGNING_KEY_MISMATCH")
     return {
@@ -514,13 +552,9 @@ def parser() -> argparse.ArgumentParser:
     prepare_command.add_argument("--macos-arm64-receipt", required=True, type=Path)
     prepare_command.add_argument("--macos-x64-attestation", required=True, type=Path)
     prepare_command.add_argument("--macos-arm64-attestation", required=True, type=Path)
-    prepare_command.add_argument(
-        "--expected-key-id", required=True, type=lambda value: value.casefold()
-    )
     prepare_command.add_argument("--output", required=True, type=Path)
     verify_command = commands.add_parser("verify")
     verify_command.add_argument("--release-dir", required=True, type=Path)
-    verify_command.add_argument("--public-key", required=True, type=Path)
     return root
 
 

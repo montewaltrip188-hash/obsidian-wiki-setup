@@ -1,10 +1,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$ManifestPath,
     [Parameter(Mandatory = $true)][string]$SignaturePath,
-    [Parameter(Mandatory = $true)][string]$PrivateKeyPath
+    [Parameter(Mandatory = $true)][string]$PrivateKeyPath,
+    [Parameter(Mandatory = $true)][string]$ProtectedPassphrasePath
 )
 
 $ErrorActionPreference = 'Stop'
+$entropyLabel = 'junyong-ai/obsidian-wiki-setup/release-signing-v1'
 
 function Write-Blocked([string]$Code) {
     [Console]::Error.WriteLine((@{ status = 'blocked'; error = $Code } | ConvertTo-Json -Compress))
@@ -14,6 +16,7 @@ function Write-Blocked([string]$Code) {
 try {
     $manifest = (Resolve-Path -LiteralPath $ManifestPath).Path
     $privateKey = (Resolve-Path -LiteralPath $PrivateKeyPath).Path
+    $protectedPassphrase = (Resolve-Path -LiteralPath $ProtectedPassphrasePath).Path
     $repository = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
     $repositoryPrefix = $repository.TrimEnd(
         [IO.Path]::DirectorySeparatorChar,
@@ -21,9 +24,11 @@ try {
     ) + [IO.Path]::DirectorySeparatorChar
     if (
         $privateKey.Equals($repository, [StringComparison]::OrdinalIgnoreCase) -or
-        $privateKey.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)
+        $privateKey.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        $protectedPassphrase.Equals($repository, [StringComparison]::OrdinalIgnoreCase) -or
+        $protectedPassphrase.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)
     ) {
-        Write-Blocked 'RELEASE_PRIVATE_KEY_INSIDE_REPOSITORY'
+        Write-Blocked 'RELEASE_PRIVATE_MATERIAL_INSIDE_REPOSITORY'
     }
     $signature = [IO.Path]::GetFullPath($SignaturePath)
     if ([IO.File]::Exists($signature)) {
@@ -34,8 +39,17 @@ try {
         [IO.Directory]::CreateDirectory($signatureDirectory) | Out-Null
     }
     $rsa = [Security.Cryptography.RSA]::Create()
+    $passphraseBytes = $null
+    $entropyBytes = $null
     try {
-        $rsa.ImportFromPem([IO.File]::ReadAllText($privateKey))
+        $entropyBytes = [Text.UTF8Encoding]::new($false).GetBytes($entropyLabel)
+        $passphraseBytes = [Security.Cryptography.ProtectedData]::Unprotect(
+            [IO.File]::ReadAllBytes($protectedPassphrase),
+            $entropyBytes,
+            [Security.Cryptography.DataProtectionScope]::CurrentUser
+        )
+        $passphrase = [Text.UTF8Encoding]::new($false).GetString($passphraseBytes)
+        $rsa.ImportFromEncryptedPem([IO.File]::ReadAllText($privateKey), $passphrase)
         if ($rsa.KeySize -lt 3072) {
             Write-Blocked 'RELEASE_RSA_KEY_TOO_SMALL'
         }
@@ -68,6 +82,8 @@ try {
             ).ToLowerInvariant()
         } | ConvertTo-Json -Compress
     } finally {
+        if ($passphraseBytes) { [Array]::Clear($passphraseBytes, 0, $passphraseBytes.Length) }
+        if ($entropyBytes) { [Array]::Clear($entropyBytes, 0, $entropyBytes.Length) }
         $rsa.Dispose()
     }
 } catch {

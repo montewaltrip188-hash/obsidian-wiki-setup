@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junyong.ai/contracts/release-signing-policy.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["algorithm", "key_id", "minimum_rsa_bits", "private_key_storage", "public_key", "schema_version"],
+  "properties": {
+    "algorithm": {"const": "RSA-SHA256-PKCS1-v1_5"},
+    "key_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "minimum_rsa_bits": {"const": 3072},
+    "private_key_storage": {"const": "encrypted-pkcs8-dpapi-current-user"},
+    "public_key": {"const": "release/release-signing-public-key.pem"},
+    "schema_version": {"const": 1}
+  }
+}

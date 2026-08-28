@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SIGN = ROOT / "release" / "sign-manifest.ps1"
 VERIFY = ROOT / "release" / "verify-manifest.ps1"
+NEW_KEY = ROOT / "release" / "new-signing-key.ps1"
 
 
 def pwsh(*args: object, expected: int = 0) -> dict:
@@ -29,28 +30,50 @@ def pwsh(*args: object, expected: int = 0) -> dict:
     return json.loads(stream)
 
 
-def create_test_keypair(root: Path, bits: int = 3072) -> tuple[Path, Path]:
+def create_test_keypair(root: Path, bits: int = 3072) -> tuple[Path, Path, Path]:
     private_key = root / "test-private.pem"
+    protected_passphrase = root / "test-passphrase.dpapi"
     public_key = root / "test-public.pem"
-    command = (
-        f"$rsa=[Security.Cryptography.RSA]::Create({bits});"
-        f"[IO.File]::WriteAllText('{private_key}',"
-        "$rsa.ExportPkcs8PrivateKeyPem(),[Text.UTF8Encoding]::new($false));"
-        f"[IO.File]::WriteAllText('{public_key}',"
-        "$rsa.ExportSubjectPublicKeyInfoPem(),[Text.UTF8Encoding]::new($false));"
-        "$rsa.Dispose()"
-    )
-    completed = subprocess.run(
-        ["pwsh", "-NoProfile", "-Command", command],
-        cwd=ROOT,
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode:
-        raise AssertionError(completed.stderr or completed.stdout)
-    return private_key, public_key
+    if bits == 3072:
+        pwsh(
+            "-File", NEW_KEY,
+            "-PrivateKeyPath", private_key,
+            "-ProtectedPassphrasePath", protected_passphrase,
+            "-PublicKeyPath", public_key,
+            "-PolicyPath", root / "test-policy.json",
+        )
+    else:
+        command = (
+            "$entropy=[Text.Encoding]::UTF8.GetBytes("
+            "'junyong-ai/obsidian-wiki-setup/release-signing-v1');"
+            "$pass=[Convert]::ToBase64String("
+            "[Security.Cryptography.RandomNumberGenerator]::GetBytes(48));"
+            "$protected=[Security.Cryptography.ProtectedData]::Protect("
+            "[Text.Encoding]::UTF8.GetBytes($pass),$entropy,"
+            "[Security.Cryptography.DataProtectionScope]::CurrentUser);"
+            f"$rsa=[Security.Cryptography.RSA]::Create({bits});"
+            "$pbe=[Security.Cryptography.PbeParameters]::new("
+            "[Security.Cryptography.PbeEncryptionAlgorithm]::Aes256Cbc,"
+            "[Security.Cryptography.HashAlgorithmName]::SHA256,1000);"
+            f"[IO.File]::WriteAllText('{private_key}',"
+            "$rsa.ExportEncryptedPkcs8PrivateKeyPem($pass,$pbe),"
+            "[Text.UTF8Encoding]::new($false));"
+            f"[IO.File]::WriteAllBytes('{protected_passphrase}',$protected);"
+            f"[IO.File]::WriteAllText('{public_key}',"
+            "$rsa.ExportSubjectPublicKeyInfoPem(),[Text.UTF8Encoding]::new($false));"
+            "$rsa.Dispose()"
+        )
+        completed = subprocess.run(
+            ["pwsh", "-NoProfile", "-Command", command],
+            cwd=ROOT,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode:
+            raise AssertionError(completed.stderr or completed.stdout)
+    return private_key, protected_passphrase, public_key
 
 
 def public_key_id(public_key: Path) -> str:
@@ -80,7 +103,7 @@ class ReleaseSigningTests(unittest.TestCase):
     def test_external_rsa_key_signs_manifest_and_tamper_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix="d3-signing-") as temporary:
             root = Path(temporary)
-            private_key, public_key = create_test_keypair(root)
+            private_key, protected_passphrase, public_key = create_test_keypair(root)
             manifest = root / "release-manifest.json"
             signature = root / "release-manifest.sig"
             manifest.write_text(
@@ -93,6 +116,7 @@ class ReleaseSigningTests(unittest.TestCase):
                 "-ManifestPath", manifest,
                 "-SignaturePath", signature,
                 "-PrivateKeyPath", private_key,
+                "-ProtectedPassphrasePath", protected_passphrase,
             )
             verified = pwsh(
                 "-File", VERIFY,
@@ -121,10 +145,21 @@ class ReleaseSigningTests(unittest.TestCase):
         self.assertIn("release-signing-private", ignore)
         self.assertNotIn("release-signing-public-key.pem", ignore)
 
+    def test_key_generator_never_writes_plaintext_private_key_or_passphrase(self):
+        with tempfile.TemporaryDirectory(prefix="d3-keygen-") as temporary:
+            root = Path(temporary)
+            private_key, protected_passphrase, public_key = create_test_keypair(root)
+            policy = json.loads((root / "test-policy.json").read_text(encoding="utf-8"))
+            self.assertIn("BEGIN ENCRYPTED PRIVATE KEY", private_key.read_text())
+            self.assertNotIn("BEGIN PRIVATE KEY", private_key.read_text())
+            self.assertGreater(protected_passphrase.stat().st_size, 32)
+            self.assertEqual(public_key_id(public_key), policy["key_id"])
+            self.assertNotIn("passphrase", json.dumps(policy).casefold())
+
     def test_signer_rejects_rsa_key_smaller_than_3072_bits(self):
         with tempfile.TemporaryDirectory(prefix="d3-weak-signing-") as temporary:
             root = Path(temporary)
-            private_key, _ = create_test_keypair(root, bits=2048)
+            private_key, protected_passphrase, _ = create_test_keypair(root, bits=2048)
             manifest = root / "release-manifest.json"
             manifest.write_text("{}\n", encoding="utf-8")
             blocked = pwsh(
@@ -132,6 +167,7 @@ class ReleaseSigningTests(unittest.TestCase):
                 "-ManifestPath", manifest,
                 "-SignaturePath", root / "release-manifest.sig",
                 "-PrivateKeyPath", private_key,
+                "-ProtectedPassphrasePath", protected_passphrase,
                 expected=2,
             )
             self.assertEqual("RELEASE_RSA_KEY_TOO_SMALL", blocked["error"])
@@ -149,7 +185,7 @@ class ReleaseSigningTests(unittest.TestCase):
             prefix="d3-cross-volume-signing-", dir=other_roots[0]
         ) as temporary:
             root = Path(temporary)
-            private_key, _ = create_test_keypair(root)
+            private_key, protected_passphrase, _ = create_test_keypair(root)
             manifest = root / "release-manifest.json"
             manifest.write_text("{}\n", encoding="utf-8")
             signed = pwsh(
@@ -157,6 +193,7 @@ class ReleaseSigningTests(unittest.TestCase):
                 "-ManifestPath", manifest,
                 "-SignaturePath", root / "release-manifest.sig",
                 "-PrivateKeyPath", private_key,
+                "-ProtectedPassphrasePath", protected_passphrase,
             )
             self.assertEqual("signed", signed["status"])
 

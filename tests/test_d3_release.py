@@ -91,11 +91,11 @@ def receipt(
     }
     if target.startswith("macos-"):
         runner = {
-            "github_repository": "jiegeng333/obsidian-wiki-setup",
+            "github_repository": "montewaltrip188-hash/obsidian-wiki-setup",
             "github_run_attempt": "1",
             "github_run_id": "12345",
             "github_sha": "1" * 40,
-            "github_workflow_ref": "jiegeng333/obsidian-wiki-setup/.github/workflows/d3-macos-candidate.yml@refs/heads/main",
+            "github_workflow_ref": "montewaltrip188-hash/obsidian-wiki-setup/.github/workflows/d3-macos-candidate.yml@refs/heads/main",
         }
     payload = {
         "architecture": machine,
@@ -215,7 +215,6 @@ class D3ReleaseTests(unittest.TestCase):
                 "--macos-arm64-receipt", receipts["macos-arm64"],
                 "--macos-x64-attestation", attestation,
                 "--macos-arm64-attestation", attestation,
-                "--expected-key-id", "d" * 64,
                 "--output", root / "release-candidate",
                 expected=2,
             )
@@ -231,8 +230,17 @@ class D3ReleaseTests(unittest.TestCase):
             macos_arm64_attestation = root / "macos-arm64-attestation.sigstore.json"
             macos_x64_attestation.write_text("{}\n", encoding="utf-8")
             macos_arm64_attestation.write_text("{}\n", encoding="utf-8")
-            private_key, public_key = create_test_keypair(root)
+            private_key, protected_passphrase, public_key = create_test_keypair(root)
             expected_key_id = public_key_id(public_key)
+            signing_policy = {
+                "algorithm": "RSA-SHA256-PKCS1-v1_5",
+                "key_id": expected_key_id,
+                "minimum_rsa_bits": 3072,
+                "private_key_storage": "encrypted-pkcs8-dpapi-current-user",
+                "public_key": "release/release-signing-public-key.pem",
+                "public_key_path": public_key,
+                "schema_version": 1,
+            }
 
             prepare_args = d3_release.parser().parse_args([
                 "prepare",
@@ -242,7 +250,6 @@ class D3ReleaseTests(unittest.TestCase):
                 "--macos-arm64-receipt", str(receipts["macos-arm64"]),
                 "--macos-x64-attestation", str(macos_x64_attestation),
                 "--macos-arm64-attestation", str(macos_arm64_attestation),
-                "--expected-key-id", expected_key_id,
                 "--output", str(release_dir),
             ])
             attestations = {
@@ -256,6 +263,8 @@ class D3ReleaseTests(unittest.TestCase):
                 },
             }
             with mock.patch.object(
+                d3_release, "load_signing_policy", return_value=signing_policy
+            ), mock.patch.object(
                 d3_release,
                 "verify_attestation",
                 side_effect=lambda _receipt, bundle, _plan: attestations[bundle],
@@ -270,22 +279,27 @@ class D3ReleaseTests(unittest.TestCase):
                 "-ManifestPath", manifest,
                 "-SignaturePath", release_dir / "release-manifest.sig",
                 "-PrivateKeyPath", private_key,
+                "-ProtectedPassphrasePath", protected_passphrase,
             )
-            verified = run_cli(
-                "verify", "--release-dir", release_dir, "--public-key", public_key
+            verify_args = d3_release.parser().parse_args(
+                ["verify", "--release-dir", str(release_dir)]
             )
+            with mock.patch.object(
+                d3_release, "load_signing_policy", return_value=signing_policy
+            ):
+                verified = d3_release.verify(verify_args)
             self.assertEqual("verified", verified["status"])
             self.assertEqual("2.1.0", verified["bundle_version"])
             self.assertEqual(10, verified["verified_files"])
 
             asset = release_dir / "assets" / "obsidian-llm-wiki-2.1.0-windows-x64.zip"
             asset.write_bytes(asset.read_bytes() + b"tamper")
-            blocked = run_cli(
-                "verify", "--release-dir", release_dir, "--public-key", public_key,
-                expected=2,
-            )
-            self.assertEqual("blocked", blocked["status"])
-            self.assertEqual("D3_RELEASE_ASSET_DRIFT", blocked["error"])
+            with mock.patch.object(
+                d3_release, "load_signing_policy", return_value=signing_policy
+            ), self.assertRaisesRegex(
+                d3_release.D3Error, "^D3_RELEASE_ASSET_DRIFT$"
+            ):
+                d3_release.verify(verify_args)
 
             asset.write_bytes(asset.read_bytes()[:-len(b"tamper")])
             manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
@@ -307,12 +321,14 @@ class D3ReleaseTests(unittest.TestCase):
                 "-ManifestPath", manifest,
                 "-SignaturePath", release_dir / "release-manifest.sig",
                 "-PrivateKeyPath", private_key,
+                "-ProtectedPassphrasePath", protected_passphrase,
             )
-            blocked = run_cli(
-                "verify", "--release-dir", release_dir, "--public-key", public_key,
-                expected=2,
-            )
-            self.assertEqual("D3_RELEASE_MANIFEST_INVALID", blocked["error"])
+            with mock.patch.object(
+                d3_release, "load_signing_policy", return_value=signing_policy
+            ), self.assertRaisesRegex(
+                d3_release.D3Error, "^D3_RELEASE_MANIFEST_INVALID$"
+            ):
+                d3_release.verify(verify_args)
 
 
 if __name__ == "__main__":
